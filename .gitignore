@@ -1,2 +1,6 @@
 plan.md
 .env
+__pycache__/
+*.csv
+*.pyc
+.pytest_cache/

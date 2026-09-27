@@ -1,4 +1,0 @@
-Method,Name,Error,Occurrences,First Seen,Last Seen
-GET,/fleet/summary?month=2026-08-01,HTTPError('429 Client Error: Too Many Requests for url: /fleet/summary?month=2026-08-01'),590,2026-09-27T20:47:09Z,2026-09-27T20:47:28Z
-GET,/fleet/offenders?limit=10&from_date=2026-08-01&to_date=2026-08-31,HTTPError('500 Server Error: Internal Server Error for url: /fleet/offenders?limit=10&from_date=2026-08-01&to_date=2026-08-31'),7,2026-09-27T20:47:13Z,2026-09-27T20:47:14Z
-GET,/fleet/offenders?limit=10&from_date=2026-08-01&to_date=2026-08-31,HTTPError('429 Client Error: Too Many Requests for url: /fleet/offenders?limit=10&from_date=2026-08-01&to_date=2026-08-31'),1717,2026-09-27T20:47:13Z,2026-09-27T20:47:28Z
