@@ -1,9 +1,13 @@
 # Architecture Decision Records (ADRs)
 
-## ADR-01: Storage Choice & CAP Trade-off
-**Decision:** Postgres (Supabase) for both relational core and telemetry, no separate NoSQL store.
-**Reasoning:** Since our dataset fits comfortably in PostgreSQL (few million rows), a single system avoids the operational complexity of a polyglot architecture. While raw telemetry demands High Availability (AP), our financial reports (`cost_summary_daily`) demand Strong Consistency (CP). Supabase gives us CP, and we rely on the `telemetry_events` table acting as an append-only log to support high write volume.
-**Consequences:** Simpler operations and a single source of truth, at the cost of not demonstrating a literal polyglot NoSQL store—mitigated by our optimized indexing strategy for the telemetry table.
+## ADR-01: Storage Choice & CAP/PACELC Trade-offs
+**CAP decision:**
+- `cost_summary_daily`, `vehicles`, `fleets`, `trips` → CP (Consistency over Availability). These hold financial/billing-adjacent numbers where a stale or inconsistent read is worse than a slower or occasionally-unavailable one.
+- `telemetry_events` (raw) → AP (Availability over Consistency). Raw telemetry is high-volume and append-only; losing strict consistency guarantees here in favor of always accepting writes is an acceptable trade, since correctness is enforced downstream during segmentation, not at raw ingest.
+
+**PACELC extension:**
+Under PACELC, our system is **PC/EC** — even in normal operation (no partition), we choose Consistency over Latency for the financial rollup path. Concretely: `cost_summary_daily` is only written by a batch job (M5) that recomputes it from `trips`/`idle_events`, rather than being updated incrementally on every event. This means the numbers a fleet manager sees are always internally consistent, at the cost of not reflecting the very latest telemetry until the next rollup run.
+We mitigate the latency cost this would otherwise impose on the dashboard by separating write-latency from read-latency: the *write* path (the batch rollup) can be slow because it's a background job; the *read* path (dashboard/API queries against the pre-computed `cost_summary_daily` table) stays fast (sub-second) because it's reading an already-aggregated table instead of computing the aggregate live on every request.
 
 ## ADR-02: Rules-Based Scoring Over Trained Classifier
 **Decision:** We implemented a weighted rules-based scoring engine for M5 rather than an ML classification model.

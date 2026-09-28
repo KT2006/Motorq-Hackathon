@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/kshitijtotawar/Desktop/MOTORQ
+plugins: cov-7.1.0, anyio-4.15.1, locust-2.46.6
+collected 10 items
+
+tests/test_cost_calc.py ....                                             [ 40%]
+tests/test_ingestion_idempotency.py .                                    [ 50%]
+tests/test_segmentation.py .....                                         [100%]
+
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.14.4-final-0 _______________
+
+Name                                   Stmts   Miss  Cover   Missing
+--------------------------------------------------------------------
+services/segmentation/config.py            9      0   100%
+services/segmentation/cost_engine.py     148    148     0%   31-513
+services/segmentation/segment.py         307    153    50%   134, 161-166, 170-174, 233-234, 246-257, 272-275, 277-280, 316, 351-352, 361, 364, 374, 386-394, 401-412, 419-432, 438-442, 447-473, 478-500, 510-542, 548-556, 566-637, 641
+--------------------------------------------------------------------
+TOTAL                                    464    301    35%
+Coverage HTML written to dir htmlcov
+============================== 10 passed in 3.42s ==============================

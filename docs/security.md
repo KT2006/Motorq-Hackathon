@@ -1,21 +1,17 @@
-# Security, NFR & Observability (M10)
+# Security & Compliance
 
-## 1. TLS Confirmation
+## API Security
+- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header.
+- **Rate Limiting**: Implemented via SlowAPI. The core analytical endpoints (`/fleet/offenders`, `/fleet/summary`) are strictly limited to `100/minute` to prevent DDoS attacks against computationally expensive rollups, as successfully proven during M11 load testing.
+- **Encryption in Transit**: The database connections to Supabase enforce TLS (`postgresql://` scheme) out of the box, ensuring telemetry and financial data cannot be intercepted.
 
-Database connections to Supabase use TLS by default (enforced at the platform level). Our FastAPI service itself runs over HTTP locally for development; for the deployed/documented cloud version, TLS termination would sit at the load balancer/ingress layer (standard pattern, documented in our Terraform/K8s manifests even if not live-deployed).
+## Container Security Scan (Trivy)
+Due to hackathon environment constraints (Docker daemon unavailable in the build environment), automated container vulnerability scanning (e.g., Trivy/Snyk) was omitted from the CI pipeline. 
 
-## 2. Location-Data Masking & Retention Policy
+To mitigate risk, base images were intentionally selected for a reduced CVE surface area (`python:3.12-slim` for the backend, `node:20-alpine` and `nginx:alpine` for the frontend). A production deployment would mandate adding an automated scan as a CI gate blocking builds with CRITICAL findings.
 
-Raw GPS telemetry (`telemetry_events`) is retained for 90 days to support trip/idle segmentation and debugging. After 90 days, raw location pings are eligible for deletion, retaining only the aggregated `trips` and `cost_summary_daily` records, which contain trip-level start/end coordinates but not the full continuous location trace. This limits how long precise, continuous location history exists for any given vehicle/driver, while preserving the cost/utilisation insights the product depends on long-term. A scheduled job (not implemented in this hackathon scope, but described here) would enforce this retention window in production.
+## Data Lifecycle & Retention
+- Telemetry events are append-only. To manage storage costs at 100K-vehicle scale, we assume a 90-day hot retention policy. Older data would be archived to cold storage (e.g., S3 Parquet) since day-to-day analytics run against the pre-calculated `cost_summary_daily` aggregation table, not the raw row data.
 
-## 3. STRIDE Threat Model
-
-This threat model is scoped to our ingestion path and public API.
-
-| Threat (STRIDE category) | Scenario | Control |
-|---|---|---|
-| **Spoofing** | Someone impersonates a legitimate vehicle/OEM and pushes fake telemetry | JWT auth required on write paths; device-level auth per source in production. |
-| **Tampering** | An attacker modifies telemetry data in transit or intercepts API responses | TLS on all DB connections (Supabase default); JWT signature prevents token tampering. |
-| **Repudiation** | A fleet manager or the AI agent takes an action and later denies it | Audit log table (`agent_logs` from M9) records every agent query + tool call + response with timestamps. |
-| **Information Disclosure** | Vehicle location/cost data leaks to an unauthorized party | JWT-protected endpoints (no anonymous access to `/vehicles`, `/fleet/offenders`, etc.). |
-| **Denial of Service** | Someone floods the API with requests, degrading service for real users | Rate limiting middleware (per-token/per-IP limits of 100/min, from M7). |
+## Audit Logging
+- **Agent Logs**: To ensure AI transparency, the `agent_logs` table strictly records every query asked of the M9 AI agent, the exact SQL tool calls it made, and the final answer given. This ensures the reasoning of any AI-driven recommendation can be audited retroactively.

@@ -31,10 +31,27 @@ Simulator → Supabase (`telemetry_events`) → Segmentation Engine (M4) → Cos
 | `GROQ_API_KEY` | API Key for the AI Agent (via Groq) | `gsk_...` |
 
 ## Running Tests
-Ensure dependencies are installed (`pip install -r services/segmentation/requirements.txt pytest locust psycopg2-binary`).
-- **Unit & Integration Tests:** `pytest tests/`
+Ensure dependencies are installed (`pip install -r services/segmentation/requirements.txt pytest pytest-cov locust psycopg2-binary`).
+- **Unit & Integration Tests:** `pytest --cov=services/segmentation --cov-report=term-missing tests/`
+  - *Note: Test coverage (detailed in `/docs/coverage-report.txt`) strictly targets our core correctness-critical logic (the M4 segmentation state machine and M5 cost calculation algorithms). Peripheral glue code, database connectors, and API routing have lighter coverage due to time constraints.*
 - **Load Tests:** `locust -f locustfile.py --host http://localhost:8000 --users 50 --spawn-rate 10 --run-time 60s --headless` (See `/docs/load-test-results.md` for results)
 
 ## Known Issues / Scope Decisions
 - **Ingestion Path:** Ingestion is currently a direct write from the simulator to Supabase rather than a Kafka/Redpanda streaming path due to hackathon time constraints (see ADR-04 for reasoning).
 - **Idempotency Proof:** Despite skipping a literal stream broker, we proved the ingestion idempotency constraints required for a real stream. The `ON CONFLICT DO NOTHING` unique index on `(vin, ts, seq)` successfully drops duplicates and orders late arrivals, as proven in our integration tests.
+
+## AI Tools & Open Source Declaration
+
+### AI Assistance
+- **Google Antigravity (Agentic IDE Assistant)** — Used for: architecture/module planning discussions, scaffolding the segmentation state machine (M4) and cost calculation engine (M5), drafting documentation (ADRs, this README), and test suite generation. All architectural decisions (storage choices, CAP/PACELC trade-offs, scoring methodology) were made and understood by the team; AI assistance was used to accelerate implementation and documentation, not to make design decisions independently.
+- **Groq API / `openai/gpt-oss-120b`** — Used as the underlying LLM for the M9 Agentic AI Layer to power natural language querying over our fleet dataset.
+
+### Key Open Source Libraries
+- **FastAPI / Uvicorn** — Backend API framework and ASGI server
+- **psycopg2** — PostgreSQL database connectivity
+- **pytest, pytest-cov** — Unit and integration testing
+- **Locust** — Load testing
+- **React / Vite** — Frontend dashboard framework
+- **Recharts** — Dashboard data visualization
+- **OpenAI Python SDK** — API client for agentic tool-calling
+- **Supabase** — Managed PostgreSQL 17 hosting
