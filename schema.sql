@@ -385,7 +385,52 @@ ON trips(vin);
 
 
 -- ============================================================
--- 9. OPTIONAL: BASIC SEED DATA
+-- 9. AI AGENT AUDIT LOG
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS agent_logs (
+    log_id              BIGSERIAL PRIMARY KEY,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_question       TEXT NOT NULL,
+    tool_calls_json     JSONB,
+    final_answer        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_logs_created
+ON agent_logs (created_at DESC);
+
+
+-- ============================================================
+-- 10. MONTHLY FLEET COST MATERIALIZED VIEW
+--
+-- Pre-aggregated by (fleet_id, month) for the /fleet/summary
+-- headline KPI endpoint. Refresh after each daily cost rollup.
+-- ============================================================
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS monthly_fleet_cost AS
+SELECT
+    v.fleet_id,
+    date_trunc('month', cs.summary_date)::date    AS month,
+    SUM(cs.fuel_cost)                              AS total_fuel_cost,
+    SUM(cs.idle_cost)                              AS total_idle_cost,
+    ROUND(AVG(cs.utilisation_pct)::numeric, 2)    AS avg_utilisation_pct,
+    SUM(cs.total_idle_min)                         AS total_idle_min,
+    COUNT(DISTINCT cs.vehicle_id)                  AS vehicle_count
+FROM cost_summary_daily cs
+JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
+GROUP BY v.fleet_id, date_trunc('month', cs.summary_date)::date;
+
+
+-- Unique index enables REFRESH CONCURRENTLY and fast lookups
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_fleet_cost_pk
+ON monthly_fleet_cost (fleet_id, month);
+
+CREATE INDEX IF NOT EXISTS idx_monthly_fleet_cost_month
+ON monthly_fleet_cost (month DESC);
+
+
+-- ============================================================
+-- 11. OPTIONAL: BASIC SEED DATA
 -- ============================================================
 -- You can delete this section if you don't want sample data.
 
@@ -397,6 +442,15 @@ VALUES
     ('diesel', 92.00, 'INR', 'India', CURRENT_DATE),
     ('hybrid', 100.00, 'INR', 'India', CURRENT_DATE),
     ('ev', 10.00, 'INR', 'India', CURRENT_DATE)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO idle_burn_rate_reference
+    (vehicle_class, idle_burn_rate, source_citation)
+VALUES
+    ('light_commercial', 0.800, 'US DOE AFDC: Idling Reduction for Commercial Vehicles (2015), Table 2'),
+    ('heavy_commercial', 1.600, 'US DOE AFDC: Idling Reduction for Commercial Vehicles (2015), Table 2'),
+    ('passenger',        0.500, 'Natural Resources Canada: Idling Guide (2021)'),
+    ('electric',         0.000, 'EVs draw negligible energy at idle (HVAC only, ~0.5 kWh/h)')
 ON CONFLICT DO NOTHING;
 
 

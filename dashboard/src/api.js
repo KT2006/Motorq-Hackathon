@@ -1,23 +1,26 @@
-const API_BASE = 'http://127.0.0.1:8000';
+// VITE_API_BASE is injected at build time via docker-compose build args.
+// Falls back to /api which is reverse-proxied by nginx to http://api:8000.
+// This means the dashboard works both locally (direct) and in any deployed env.
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 let token = null;
 
 export const initAuth = async () => {
   if (token) return token;
   try {
-    const res = await fetch(`${API_BASE}/token`, { 
+    const res = await fetch(`${API_BASE}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        username: import.meta.env.VITE_DEMO_USERNAME || 'admin', 
-        password: import.meta.env.VITE_DEMO_PASSWORD 
+      body: JSON.stringify({
+        username: import.meta.env.VITE_DEMO_USERNAME || 'admin',
+        password: import.meta.env.VITE_DEMO_PASSWORD
       })
     });
     const data = await res.json();
     token = data.access_token;
     return token;
   } catch (err) {
-    console.error("Auth init failed:", err);
+    console.error('Auth init failed:', err);
     return null;
   }
 };
@@ -28,40 +31,40 @@ const fetchAPI = async (endpoint, options = {}) => {
     ...options,
     headers: {
       ...options.headers,
-      'Authorization': `Bearer ${token}`
+      Authorization: `Bearer ${token}`
     }
   });
   if (!res.ok) {
-      let errDetail = `API error: ${res.status}`;
-      try {
-          const errBody = await res.json();
-          if (errBody.detail) errDetail = errBody.detail;
-      } catch (e) {}
-      const error = new Error(errDetail);
-      error.response = { data: { detail: errDetail } };
-      throw error;
+    let errDetail = `API error: ${res.status}`;
+    try {
+      const errBody = await res.json();
+      if (errBody.detail) errDetail = errBody.detail;
+    } catch (e) { /* ignore */ }
+    const error = new Error(errDetail);
+    error.response = { data: { detail: errDetail } };
+    throw error;
   }
   return res.json();
 };
 
-export const getFleetSummary = (month = '2026-08-01') => {
-  return fetchAPI(`/fleet/summary?month=${month}`);
-};
+export const getFleetSummary = (month = '2026-08-01') =>
+  fetchAPI(`/fleet/summary?month=${month}`);
 
-export const getTopOffenders = (limit = 10, from = '2026-08-28', to = '2026-09-26') => {
-  return fetchAPI(`/fleet/offenders?limit=${limit}&from_date=${from}&to_date=${to}`);
-};
+export const getTopOffenders = (limit = 10, from = '2026-08-28', to = '2026-09-26') =>
+  fetchAPI(`/fleet/offenders?limit=${limit}&from_date=${from}&to_date=${to}`);
 
-export const getVehicleCostSummary = (vehicleId, from = '2026-08-28', to = '2026-09-26') => {
-  return fetchAPI(`/vehicles/${vehicleId}/cost-summary?from_date=${from}&to_date=${to}`);
-};
+export const getVehicleCostSummary = (vehicleId, from = '2026-08-28', to = '2026-09-26') =>
+  fetchAPI(`/vehicles/${vehicleId}/cost-summary?from_date=${from}&to_date=${to}`);
 
-const post = (endpoint, data) => {
-    return fetchAPI(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-    }).then(res => ({ data: res }));
-};
+/** Fetch live ephemeral vehicle status from Redis via the API (polyglot store demo). */
+export const getLiveStatus = (vin) =>
+  fetchAPI(`/vehicles/${encodeURIComponent(vin)}/live-status`);
+
+const post = (endpoint, data) =>
+  fetchAPI(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }).then(res => ({ data: res }));
 
 export default { post };

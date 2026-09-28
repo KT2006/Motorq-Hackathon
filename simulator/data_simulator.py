@@ -252,10 +252,19 @@ def get_pg_engine():
             "POSTGRES_URL not set. Add it to your .env file:\n"
             "  POSTGRES_URL=postgresql://user:password@host:5432/dbname"
         )
-    from sqlalchemy import create_engine
-    # psycopg2 driver expected; SQLAlchemy uses postgresql+psycopg2 by default
+    from sqlalchemy import create_engine, event
     url = POSTGRES_URL.replace("postgres://", "postgresql://")
-    return create_engine(url, pool_pre_ping=True)
+    engine = create_engine(url, pool_pre_ping=True)
+
+    # Supabase pooler sometimes sets default_transaction_read_only=on — force it off
+    @event.listens_for(engine, "connect")
+    def set_read_write(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("SET default_transaction_read_only = off")
+        cursor.close()
+        dbapi_conn.commit()
+
+    return engine
 
 
 def _upsert_fleets(engine, fleets: pd.DataFrame):
@@ -341,13 +350,22 @@ def _insert_telemetry_batch(engine, events: list):
         VALUES %s
         ON CONFLICT (vin, ts, seq) DO NOTHING
     """
-    raw = engine.raw_connection()
-    try:
-        with raw.cursor() as cur:
-            psycopg2.extras.execute_values(cur, sql, rows, page_size=2000)
-        raw.commit()
-    finally:
-        raw.close()
+    for attempt in range(3):
+        raw = engine.raw_connection()
+        try:
+            with raw.cursor() as cur:
+                psycopg2.extras.execute_values(cur, sql, rows, page_size=2000)
+            raw.commit()
+            return
+        except Exception as e:
+            raw.rollback()
+            if "read-only" in str(e).lower() and attempt < 2:
+                print(f"  read-only connection, retrying ({attempt+1}/3)...")
+                time.sleep(2)
+                continue
+            raise
+        finally:
+            raw.close()
 
 
 # ----------------------------------------------------------------------------

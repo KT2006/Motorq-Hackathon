@@ -1,25 +1,37 @@
 version: '3.8'
 
 services:
-  api:
-    build:
-      context: ./services/api
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_URL=${POSTGRES_URL}
-      - JWT_SECRET=${JWT_SECRET}
-      - GROQ_API_KEY=${GROQ_API_KEY}
+  # ─────────────────────────────────────────────
+  # Infrastructure layer
+  # ─────────────────────────────────────────────
 
-  dashboard:
-    build:
-      context: ./dashboard
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB:       fleet_db
+      POSTGRES_USER:     fleet_user
+      POSTGRES_PASSWORD: fleet_pass
     ports:
-      - "80:80"
-    depends_on:
-      - api
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fleet_user -d fleet_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redpanda:
     image: redpandadata/redpanda:latest
@@ -39,8 +51,96 @@ services:
       - PLAINTEXT://redpanda:9092
     ports:
       - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy: true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
-  redis:
-    image: redis:7-alpine
+  # ─────────────────────────────────────────────
+  # Streaming ingestion layer
+  # ─────────────────────────────────────────────
+
+  ingestion:
+    build:
+      context: ./services/ingestion
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override with container-internal hostnames
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      REDIS_HOST:             redis
+      REDIS_PORT:             "6379"
+      TELEMETRY_TOPIC:        telemetry
+      INGEST_BATCH_SIZE:      "500"
+      LOG_LEVEL:              INFO
+    restart: on-failure
+
+  # ─────────────────────────────────────────────
+  # One-shot seeder: generates vehicles + events,
+  # runs segmentation, runs cost rollup.
+  # Exits when done; compose continues.
+  # ─────────────────────────────────────────────
+
+  seeder:
+    build:
+      context: ./services/segmentation
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    volumes:
+      - ./simulator:/app/simulator:ro
+      - ./schema.sql:/app/schema.sql:ro
+    command: ["python", "-u", "seed_and_run.py"]
+
+  # ─────────────────────────────────────────────
+  # Application layer
+  # ─────────────────────────────────────────────
+
+  api:
+    build:
+      context: ./services/api
     ports:
-      - "6379:6379"
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db}
+      JWT_SECRET:   ${JWT_SECRET}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      REDIS_HOST:   redis
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_API_BASE: /api
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

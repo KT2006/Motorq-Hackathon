@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_DB:       fleet_db
+          POSTGRES_USER:     fleet_user
+          POSTGRES_PASSWORD: fleet_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet_user -d fleet_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install \
+            psycopg2-binary \
+            python-dotenv \
+            kafka-python \
+            pydantic \
+            pytest \
+            pytest-cov
+
+      - name: Apply schema
+        env:
+          PGPASSWORD: fleet_pass
+        run: |
+          psql -h localhost -U fleet_user -d fleet_db -f schema.sql
+
+      - name: Run tests
+        env:
+          POSTGRES_URL: postgresql://fleet_user:fleet_pass@localhost:5432/fleet_db
+        run: |
+          pytest tests/ -v --cov=services/segmentation --cov-report=term-missing
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install and build
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build

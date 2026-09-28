@@ -1,17 +1,43 @@
 # Security & Compliance
 
 ## API Security
-- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header. For demo convenience, the dashboard automatically authenticates against the `/token` endpoint using a fixed demo credential. In production, this would be replaced with a real user-facing login form, not embedded credentials.
-- **Rate Limiting**: Implemented via SlowAPI. The core analytical endpoints (`/fleet/offenders`, `/fleet/summary`) are strictly limited to `100/minute` to prevent DDoS attacks against computationally expensive rollups, as successfully proven during M11 load testing.
-- **Encryption in Transit**: The database connections to Supabase enforce TLS (`postgresql://` scheme) out of the box, ensuring telemetry and financial data cannot be intercepted.
 
-## Container Security Scan (Trivy)
-Due to hackathon environment constraints (Docker daemon unavailable in the build environment), automated container vulnerability scanning (e.g., Trivy/Snyk) was omitted from the CI pipeline. 
+- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header. The dashboard auto-authenticates using demo credentials configured via `DEMO_PASSWORD` (server-side env var, not embedded in code).
+- **Rate Limiting**: Implemented via SlowAPI. Core analytical endpoints are limited to `100/minute`; the `/chat` AI endpoint is limited to `20/minute` to prevent abuse of the LLM API.
+- **Encryption in Transit**: Supabase connections enforce TLS by default. Local Docker networking uses plaintext (acceptable for local dev only; a production deploy behind a load balancer or reverse proxy would terminate TLS there).
+- **CORS**: Currently set to `allow_origins=["*"]` — appropriate for a hackathon demo; a production deployment would scope this to the specific dashboard origin.
 
-To mitigate risk, base images were intentionally selected for a reduced CVE surface area (`python:3.12-slim` for the backend, `node:20-alpine` and `nginx:alpine` for the frontend). A production deployment would mandate adding an automated scan as a CI gate blocking builds with CRITICAL findings.
+## STRIDE Threat Model — Ingestion Path & Public API
+
+| # | STRIDE Category | Threat | Affected Component | Control |
+|---|---|---|---|---|
+| 1 | **Spoofing** | Attacker sends telemetry events with a spoofed VIN, injecting false data into `telemetry_events` | Redpanda ingestion topic | Authenticate producers at the broker level (SASL/SCRAM in production); VIN format validation in the consumer's Pydantic schema rejects malformed payloads |
+| 2 | **Tampering** | Man-in-the-middle modifies in-flight telemetry events between the vehicle and Redpanda | Network layer (producer → broker) | Enforce mTLS between producers and Redpanda; idempotency key `(vin, ts, seq)` means re-injected events are harmless no-ops |
+| 3 | **Repudiation** | Fleet manager denies asking the AI agent a question that triggered a cost recommendation | AI agent (`/chat` endpoint) | Every agent request, tool call, and final answer is persisted in `agent_logs` with timestamp — provides a full audit trail |
+| 4 | **Information Disclosure** | Unauthenticated caller reads fleet cost data or vehicle positions | FastAPI public API | All endpoints (except `/token`) require a valid JWT; JWT uses HS256 with a secret stored only in env vars (never in source); rate limiting prevents enumeration |
+| 5 | **Denial of Service** | Attacker floods `/fleet/offenders` (an expensive aggregation query) to exhaust DB connections | FastAPI → PostgreSQL | SlowAPI rate limiter (100 req/min per IP) returns 429 before the query runs; `cost_summary_daily` pre-aggregation means the query is O(1) not O(N) against raw telemetry |
+
+*Elevation of Privilege (E) is not the primary concern in a read-heavy analytics API with no write surface exposed to users; the agent's tools are read-only by design (documented in ADR-03).*
+
+## Container Security (Trivy)
+
+A Trivy scan of the API image is committed to `docs/trivy_scan_api.txt`.
+
+**Honest disclosure:** The scan reports 44 high-severity findings, all in base OS packages (`python:3.12-slim`). No critical findings. These are acknowledged as technical debt. A production release would:
+1. Pin to a hardened base image (e.g., `cgr.dev/chainguard/python:latest`)
+2. Run Trivy as a CI gate blocking merges with CRITICAL findings
+3. Subscribe to base image update notifications
 
 ## Data Lifecycle & Retention
-- Telemetry events are append-only. To manage storage costs at 100K-vehicle scale, we assume a 90-day hot retention policy. Older data would be archived to cold storage (e.g., S3 Parquet) since day-to-day analytics run against the pre-calculated `cost_summary_daily` aggregation table, not the raw row data.
+
+- Telemetry events are append-only with an `ON CONFLICT DO NOTHING` idempotency guarantee on `(vin, ts, seq)`.
+- Assumed hot retention policy: 90 days of raw `telemetry_events`. Older data would be archived to cold storage (e.g., S3 Parquet) — day-to-day analytics run against `cost_summary_daily`, not raw rows.
+- GPS coordinates are retained at full precision for 90 days, then aggregated to trip-level origin/destination only — balancing operational utility against privacy.
 
 ## Audit Logging
-- **Agent Logs**: To ensure AI transparency, the `agent_logs` table strictly records every query asked of the M9 AI agent, the exact SQL tool calls it made, and the final answer given. This ensures the reasoning of any AI-driven recommendation can be audited retroactively.
+
+Every query asked of the M9 AI agent is recorded in `agent_logs` with the exact tool calls made and the final answer. This ensures every AI-driven recommendation is retroactively auditable and satisfies the compliance requirement for "audit logs for every AI-agent action."
+
+## VITE_* Variable Disclosure
+
+The `VITE_DEMO_PASSWORD` environment variable is injected at build time and embedded in the compiled JavaScript bundle. This is publicly discoverable by anyone with access to the frontend bundle. This is acceptable for a hackathon demo (the only data at risk is synthetic fleet data). In production, this would be replaced with a proper server-side session flow where credentials are never embedded in the frontend bundle.

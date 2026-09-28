@@ -161,11 +161,12 @@ def vehicle_cost_summary(
         
     vehicle_id_str = vehicle_id
     query = """
-        SELECT summary_date, total_distance_km, total_drive_min, total_idle_min,
+        SELECT v.vin, cs.summary_date, cs.total_distance_km, cs.total_drive_min, cs.total_idle_min,
                fuel_cost, idle_cost, utilisation_pct
-        FROM cost_summary_daily
-        WHERE vehicle_id = %s AND summary_date BETWEEN %s AND %s
-        ORDER BY summary_date ASC
+        FROM cost_summary_daily cs
+        JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
+        WHERE cs.vehicle_id = %s AND cs.summary_date BETWEEN %s AND %s
+        ORDER BY cs.summary_date ASC
     """
     with get_db() as cur:
         cur.execute(query, (vehicle_id_str, from_date, to_date))
@@ -174,7 +175,10 @@ def vehicle_cost_summary(
     if not rows:
         raise HTTPException(status_code=404, detail="Vehicle not found or no data in date range")
         
-    return {"vehicle_id": vehicle_id_str, "data": rows}
+    vin = rows[0].pop("vin")
+    for row in rows[1:]:
+        row.pop("vin", None)
+    return {"vehicle_id": vehicle_id_str, "vin": vin, "data": rows}
 
 @app.get("/fleet/summary")
 @limiter.limit("100/minute")
@@ -263,12 +267,33 @@ def top_offenders(
     return {"data": rows, "limit": limit}
 
 import redis
-# In production, use connection pooling and get from env
+
 redis_host = os.getenv("REDIS_HOST", "redis")
-redis_client = redis.Redis(host=redis_host, port=6379, decode_responses=True)
+redis_port = int(os.getenv("REDIS_PORT", "6379"))
+redis_client = redis.Redis(
+    host=redis_host,
+    port=redis_port,
+    decode_responses=True,
+    socket_connect_timeout=3,
+    socket_timeout=3,
+    health_check_interval=30,
+)
+
+@app.get("/health", include_in_schema=False)
+def health_check():
+    """Container health probe: both durable and live-status stores must be reachable."""
+    try:
+        with get_db() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        redis_client.ping()
+        return {"status": "ok", "postgres": "ok", "redis": "ok"}
+    except (psycopg2.Error, redis.RedisError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=f"Dependency unavailable: {exc}")
 
 @app.get("/vehicles/{vin}/live-status")
-def get_live_status(vin: str, user: dict = Depends(verify_token)):
+@limiter.limit("100/minute")
+def get_live_status(request: Request, vin: str, user: dict = Depends(verify_token)):
     """Fetch live, ephemeral vehicle status from Redis."""
     try:
         status = redis_client.hgetall(f"vehicle:{vin}:status")
@@ -279,7 +304,7 @@ def get_live_status(vin: str, user: dict = Depends(verify_token)):
         if 'speed_kmh' in status:
             status['speed_kmh'] = float(status['speed_kmh'])
         if 'ignition_status' in status:
-            status['ignition_status'] = status['ignition_status'] == 'True'
+            status['ignition_status'] = status['ignition_status'].lower() == 'true'
             
         return status
     except redis.exceptions.ConnectionError:
@@ -307,7 +332,7 @@ def run_agent_loop(query: str, from_date: str, to_date: str):
     )
     
     # We'll use a supported model available for your API key
-    model_name = "openai/gpt-oss-120b"
+    model_name = os.getenv("GROQ_MODEL", "llama3-8b-8192")
     
     # 1. Define tools
     tools = [
