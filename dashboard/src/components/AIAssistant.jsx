@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Bot, User, Send, Loader2, Sparkles, Terminal } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import api from '../api';
 
 export default function AIAssistant() {
@@ -84,15 +86,22 @@ export default function AIAssistant() {
               </div>
               
               <div style={{
-                maxWidth: '70%',
+                maxWidth: '85%',
                 background: msg.role === 'user' ? 'var(--accent)' : 'rgba(255, 255, 255, 0.03)',
                 padding: '16px',
                 borderRadius: '16px',
                 borderTopRightRadius: msg.role === 'user' ? '4px' : '16px',
                 borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
-                border: msg.role === 'assistant' ? '1px solid rgba(255, 255, 255, 0.05)' : 'none'
+                border: msg.role === 'assistant' ? '1px solid rgba(255, 255, 255, 0.05)' : 'none',
+                overflowX: 'auto'
               }}>
-                <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{msg.content}</div>
+                <div className="markdown-body" style={{ color: 'inherit' }}>
+                  {msg.role === 'user' ? (
+                    <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{msg.content}</div>
+                  ) : (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  )}
+                </div>
                 
                 {msg.tool_calls && msg.tool_calls.length > 0 && (
                   <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>

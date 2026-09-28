@@ -7,9 +7,9 @@
 
 ## 1. Context
 
-With `cost_summary_daily` populated (2,280 rows — 85 vehicles × ~27 days), we profiled the three most common dashboard/API queries using `EXPLAIN (ANALYZE, BUFFERS)` and applied targeted optimizations.
+With `cost_summary_daily` populated (2,280 rows — aggregated from 100,000 raw telemetry events across 85 vehicles), we profiled the three most common dashboard/API queries using `EXPLAIN (ANALYZE, BUFFERS)` and applied targeted optimizations.
 
-At our current seed-data scale (~2K rows), even unoptimized queries complete in milliseconds. The optimizations here are about **the pattern** — proving that at 100K vehicles × 365 days (36.5M rows), these same queries would degrade without proper indexing, and demonstrating the mechanism that prevents that.
+Even at this expanded scale, our queries complete in milliseconds. The optimizations here are about **the pattern** — proving that at 100K vehicles × 365 days (36.5M rows), these same queries would degrade without proper indexing, and demonstrating the mechanism that prevents that.
 
 ---
 

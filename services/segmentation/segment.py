@@ -359,9 +359,17 @@ def _trip_is_valid(trip: dict) -> bool:
     """Filter out phantom micro-trips caused by GPS noise."""
     if trip.get("distance_km", 0) < MIN_TRIP_DISTANCE_KM:
         return False
+        
     duration_sec = (trip["end_ts"] - trip["start_ts"]).total_seconds()
     if duration_sec < MIN_TRIP_DURATION_SEC:
         return False
+        
+    # Reject absurdly slow trips (e.g., 0.5km over 24 hours) as noise or test artifacts
+    if duration_sec > 0:
+        true_avg_speed_kmh = trip.get("distance_km", 0) / (duration_sec / 3600.0)
+        if true_avg_speed_kmh < 1.0:
+            return False
+            
     return True
 
 

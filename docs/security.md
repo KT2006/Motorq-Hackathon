@@ -1,7 +1,7 @@
 # Security & Compliance
 
 ## API Security
-- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header.
+- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header. For demo convenience, the dashboard automatically authenticates against the `/token` endpoint using a fixed demo credential. In production, this would be replaced with a real user-facing login form, not embedded credentials.
 - **Rate Limiting**: Implemented via SlowAPI. The core analytical endpoints (`/fleet/offenders`, `/fleet/summary`) are strictly limited to `100/minute` to prevent DDoS attacks against computationally expensive rollups, as successfully proven during M11 load testing.
 - **Encryption in Transit**: The database connections to Supabase enforce TLS (`postgresql://` scheme) out of the box, ensuring telemetry and financial data cannot be intercepted.
 

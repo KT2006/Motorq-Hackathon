@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
+from uuid import UUID
 
 import jwt
 import psycopg2
@@ -90,11 +91,24 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
 # Routes
 # ---------------------------------------------------------------------------
 
+from pydantic import BaseModel
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 @app.post("/token")
-def login():
+def login(creds: LoginRequest):
     """Generates a test token valid for 1 hour."""
+    # Use environment variables for demo credentials to avoid hardcoding secrets
+    demo_user = os.getenv("DEMO_USERNAME", "admin")
+    demo_pass = os.getenv("DEMO_PASSWORD")
+    
+    if not demo_pass or creds.username != demo_user or creds.password != demo_pass:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+        
     payload = {
-        "sub": "test_user",
+        "sub": creds.username,
         "exp": datetime.now(timezone.utc) + timedelta(hours=1)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -140,6 +154,12 @@ def vehicle_cost_summary(
     user: dict = Depends(verify_token)
 ):
     """Get daily cost breakdown for a specific vehicle over a date range."""
+    try:
+        UUID(vehicle_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Vehicle not found (invalid ID)")
+        
+    vehicle_id_str = vehicle_id
     query = """
         SELECT summary_date, total_distance_km, total_drive_min, total_idle_min,
                fuel_cost, idle_cost, utilisation_pct
@@ -148,10 +168,13 @@ def vehicle_cost_summary(
         ORDER BY summary_date ASC
     """
     with get_db() as cur:
-        cur.execute(query, (vehicle_id, from_date, to_date))
+        cur.execute(query, (vehicle_id_str, from_date, to_date))
         rows = cur.fetchall()
         
-    return {"vehicle_id": vehicle_id, "data": rows}
+    if not rows:
+        raise HTTPException(status_code=404, detail="Vehicle not found or no data in date range")
+        
+    return {"vehicle_id": vehicle_id_str, "data": rows}
 
 @app.get("/fleet/summary")
 @limiter.limit("100/minute")
@@ -300,7 +323,7 @@ def run_agent_loop(query: str, from_date: str, to_date: str):
     ]
     messages.append({"role": "user", "content": query})
     
-    max_loops = 3
+    max_loops = 5
     tool_calls_log = []
     
     for i in range(max_loops):
