@@ -19,10 +19,15 @@ We mitigate the latency cost this would otherwise impose on the dashboard by sep
 **Reasoning:** The agent interacts with numeric time-series data and structured relational queries (e.g. "which vehicles are idling the most?"). There is no semantic search or unstructured text retrieval requirement for this specific workflow.
 **Consequences:** The agent executes SQL-backed tool calls directly, returning precise, deterministic financial numbers rather than retrieved semantic approximations.
 
-## ADR-04: Ingestion Path — Direct Write vs. Streaming Consumer
-**Decision:** Ingestion is currently a direct write from the simulator to Supabase rather than a Kafka/Redpanda streaming path.
-**Reasoning:** Due to time constraints in a 72-hour hackathon, we scoped down the architecture to avoid managing a separate message broker. Data flows directly from the simulator to Supabase.
-**Consequences:** We skipped a literal streaming consumer. However, we implemented the required streaming idempotency mechanisms in the database via a unique index and `ON CONFLICT DO NOTHING` to demonstrate how we would handle at-least-once delivery duplicates from a real stream.
+## ADR-04: Ingestion Path — Streaming Consumer
+**Decision:** Real-time ingestion is demonstrated via a Redpanda producer/consumer pair (`/services/ingestion/`), using the existing idempotent `ON CONFLICT DO NOTHING` constraint on `(vin, ts, seq)`.
+**Reasoning:** Bulk historical data continues to load via direct batch insert for volume/performance reasons; the streaming path proves the ingestion mechanism end-to-end, including duplicate-event handling.
+**Consequences:** Proves a robust streaming architecture capable of handling real-time telemetry while demonstrating handling of at-least-once delivery duplicates.
+
+## ADR-06: Polyglot Persistence — Live Vehicle Status Cache
+**Decision:** Live vehicle status is cached in Redis rather than served from Postgres.
+**Reasoning:** This data is high-write-frequency, ephemeral, and doesn't need durability or ACID guarantees — losing a few seconds of cached status on restart is acceptable, whereas losing a `cost_summary_daily` row is not. This is a deliberate PACELC split within our own architecture: `cost_summary_daily` is PC/EC (Consistency prioritized, per ADR-01), while `vehicle:*:status` in Redis is PA/EL (Availability and low latency prioritized) — sub-millisecond reads for a live-status lookup, at the cost of not being the durable source of truth.
+**Consequences:** Demonstrates a targeted use of NoSQL where it fits best alongside our relational core data.
 
 ## ADR-05: Idempotency Approach
 **Decision:** Implemented `ON CONFLICT DO NOTHING` with a unique index on `(vin, ts, seq)` in `telemetry_events`.

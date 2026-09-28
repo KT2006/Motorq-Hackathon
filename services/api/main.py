@@ -262,6 +262,29 @@ def top_offenders(
         
     return {"data": rows, "limit": limit}
 
+import redis
+# In production, use connection pooling and get from env
+redis_host = os.getenv("REDIS_HOST", "redis")
+redis_client = redis.Redis(host=redis_host, port=6379, decode_responses=True)
+
+@app.get("/vehicles/{vin}/live-status")
+def get_live_status(vin: str, user: dict = Depends(verify_token)):
+    """Fetch live, ephemeral vehicle status from Redis."""
+    try:
+        status = redis_client.hgetall(f"vehicle:{vin}:status")
+        if not status:
+            raise HTTPException(status_code=404, detail="No live status available for this vehicle")
+        
+        # Cast values for a polished response
+        if 'speed_kmh' in status:
+            status['speed_kmh'] = float(status['speed_kmh'])
+        if 'ignition_status' in status:
+            status['ignition_status'] = status['ignition_status'] == 'True'
+            
+        return status
+    except redis.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Redis cache unavailable")
+
 # ---------------------------------------------------------------------------
 # M9: AI Agent Layer
 # ---------------------------------------------------------------------------
