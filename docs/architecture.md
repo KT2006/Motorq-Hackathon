@@ -140,6 +140,16 @@ erDiagram
         JSONB tool_calls_json
         TEXT final_answer
     }
+    audit_log {
+        BIGSERIAL log_id PK
+        TIMESTAMPTZ created_at
+        TEXT user_sub
+        TEXT action
+        TEXT resource
+        TEXT resource_id
+        TEXT ip_address
+        JSONB details
+    }
 
     fleets ||--o{ vehicles : "has"
     vehicles ||--o{ trips : "makes"
@@ -216,3 +226,34 @@ sequenceDiagram
     CON->>RP: commit offsets
     Note over CON: At-least-once delivery\n+ idempotent writes = exactly-once semantics
 ```
+
+---
+
+## 7. AI Agent Tool-Calling Sequence
+
+```mermaid
+sequenceDiagram
+    participant U as User (Dashboard)
+    participant API as FastAPI /chat
+    participant LLM as Groq LLM
+    participant DB as PostgreSQL
+    participant LOG as audit_log
+
+    U->>API: POST /chat {query, from_date, to_date}
+    API->>API: verify JWT, extract fleet_id
+    API->>LOG: audit_log(user, "ai_query", "chat")
+
+    loop max 5 iterations, 30s timeout
+        API->>LLM: chat.completions.create(messages, tools)
+        LLM-->>API: tool_call: get_fleet_offenders(limit=10)
+        API->>API: validate & clamp limit (1-50)
+        API->>DB: SELECT offenders query
+        DB-->>API: offender rows
+        API->>LLM: tool result as message
+        LLM-->>API: final text response (no more tool calls)
+    end
+
+    API->>DB: INSERT INTO agent_logs
+    API-->>U: {answer, tool_calls}
+```
+

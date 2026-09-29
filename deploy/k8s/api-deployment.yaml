@@ -1,9 +1,49 @@
+## Kubernetes Deployment — Fleet Intelligence Platform
+#
+# This directory contains K8s manifests for the full platform.
+# NOTE: These are documented infrastructure-as-code artifacts intended
+# to demonstrate the deployment architecture. For the hackathon,
+# local deployment uses Docker Compose.
+#
+# Usage (if deploying to a real cluster):
+#   kubectl apply -f deploy/k8s/
+
+---
+# ConfigMap for shared environment variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: motorq-config
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+  TELEMETRY_TOPIC: "telemetry"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  CORS_ORIGINS: "http://localhost:80,http://localhost:5173"
+
+---
+# Secret template — values must be base64-encoded before applying
+apiVersion: v1
+kind: Secret
+metadata:
+  name: motorq-secrets
+type: Opaque
+stringData:
+  POSTGRES_URL: "postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db"
+  JWT_SECRET: "change-me-in-production"
+  DEMO_USERNAME: "admin"
+  DEMO_PASSWORD: "change-me"
+  GROQ_API_KEY: ""
+
+---
+# API Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: motorq-api
   labels:
     app: motorq-api
+    tier: backend
 spec:
   replicas: 2
   selector:
@@ -13,6 +53,7 @@ spec:
     metadata:
       labels:
         app: motorq-api
+        tier: backend
     spec:
       containers:
       - name: motorq-api
@@ -20,8 +61,30 @@ spec:
         ports:
         - containerPort: 8000
         envFrom:
+        - configMapRef:
+            name: motorq-config
         - secretRef:
             name: motorq-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
 ---
 apiVersion: v1
 kind: Service
@@ -34,4 +97,120 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8000
+  type: ClusterIP
+
+---
+# Ingestion Consumer Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: motorq-ingestion
+  labels:
+    app: motorq-ingestion
+    tier: backend
+spec:
+  replicas: 3  # Scale consumers for throughput
+  selector:
+    matchLabels:
+      app: motorq-ingestion
+  template:
+    metadata:
+      labels:
+        app: motorq-ingestion
+        tier: backend
+    spec:
+      containers:
+      - name: motorq-ingestion
+        image: motorq-ingestion:latest
+        envFrom:
+        - configMapRef:
+            name: motorq-config
+        - secretRef:
+            name: motorq-secrets
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+
+---
+# Dashboard Deployment (nginx + React SPA)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: motorq-dashboard
+  labels:
+    app: motorq-dashboard
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: motorq-dashboard
+  template:
+    metadata:
+      labels:
+        app: motorq-dashboard
+        tier: frontend
+    spec:
+      containers:
+      - name: motorq-dashboard
+        image: motorq-dashboard:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: motorq-dashboard-service
+spec:
+  selector:
+    app: motorq-dashboard
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
   type: LoadBalancer
+
+---
+# Ingress — routes traffic to frontend and API
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: motorq-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /api(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: motorq-api-service
+            port:
+              number: 80
+      - path: /(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: motorq-dashboard-service
+            port:
+              number: 80
