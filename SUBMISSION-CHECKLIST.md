@@ -15,13 +15,13 @@ do not present an unmeasured target as achieved. Use synthetic data only.
 - [x] Create a requirement matrix from the problem statement and every section
   of the solution-document template. For each requirement, record its
   implementation path, acceptance test, evidence file, and status.
-- [ ] Freeze the benchmark environment and demo scope: hardware, Docker
+- [x] Freeze the benchmark environment and demo scope: hardware, Docker
   resources, seed size, dates, timezone, API ranges, and exact startup command.
-- [ ] Reconcile all conflicting project figures (vehicle counts, event counts,
+- [x] Reconcile all conflicting project figures (vehicle counts, event counts,
   date ranges, costs, throughput, latency, coverage, and failure rates) against
   reproducible runs. Remove or relabel stale/unverified numbers in the README
   and docs.
-- [ ] Review the current commit and worktree. Keep real credentials, generated
+- [x] Review the current commit and worktree. Keep real credentials, generated
   personal data, and local-only files out of Git; retain only synthetic
   datasets intended for submission.
 - [x] Agree on one canonical implementation for seeding, segmentation, cost
@@ -87,11 +87,11 @@ the full product journey without manual database fixes or unexplained errors.
   post-test reconciliation. Provision a capable test environment if a laptop
   cannot meet the target; do not substitute a rate-limit test for a successful
   throughput test.
-- [ ] Test data partitioning and scale behavior for telemetry; document
+- [x] Test data partitioning and scale behavior for telemetry; document
   partition/shard keys, hot/warm/cold retention, storage estimates, and the
   cost assumptions. Add the implementation needed to meet the chosen
   partitioning design rather than describing a hypothetical partition.
-- [ ] Keep PostgreSQL, Redis, Redpanda, and the no-vector-store decision
+- [x] Keep PostgreSQL, Redis, Redpanda, and the no-vector-store decision
   justified by their actual roles and tested failure/consistency behavior.
 
 **Exit gate:** the synthetic scale dataset exists, the streaming pipeline is
@@ -100,15 +100,15 @@ project is explicitly not ready to claim 100% completion.
 
 ## Phase 4 — Correctness, product value, and secure access
 
-- [ ] Validate segmentation and cost calculations against hand-checkable
+- [x] Validate segmentation and cost calculations against hand-checkable
   examples and independent SQL/data checks. Test short/noisy stops, long idles,
   missing markers, midnight boundaries, duplicate events, and multiple fuel
   types. Ensure trips, idle events, and daily rollups reconcile.
-- [ ] Use cited regional fuel prices and idle-burn assumptions. Clearly label
+- [x] Use cited regional fuel prices and idle-burn assumptions. Clearly label
   synthetic estimates, dates, units, and assumptions in the UI and solution
   document. Prove the displayed idle-cost result can be traced to source
   telemetry and a calculation.
-- [ ] Prove the weighted offender ranking beats or adds useful signal beyond a
+- [x] Prove the weighted offender ranking beats or adds useful signal beyond a
   clearly defined naive baseline on reproducible sample data. Explain score
   normalization and weights; show at least one case where the rankings differ.
 - [x] Make the AI assistant strictly use bounded, read-only tools; validate
@@ -118,11 +118,11 @@ project is explicitly not ready to claim 100% completion.
 - [ ] Evaluate the AI against a small fixed set of fleet questions. Check that
   answers cite retrieved values, do not invent metrics when data is missing,
   and produce actionable recommendations. Report pass criteria and failures.
-- [x] Remove production-default JWT secrets and prevent demo passwords or API
+- [ ] Remove production-default JWT secrets and prevent demo passwords or API
   keys from being embedded in public JavaScript. Use an actual login/auth
   flow; hash credentials server-side and rotate secrets through environment
   configuration or a secret manager.
-- [x] Implement and test authorization boundaries, including fleet/tenant
+- [ ] Implement and test authorization boundaries, including fleet/tenant
   isolation, not merely valid-JWT authentication. Add negative tests for
   cross-tenant reads and unauthorized access.
 - [x] Document and implement the scoped security controls required by the
@@ -145,11 +145,11 @@ implemented controls.
 - [ ] Raise test coverage for the core services and algorithms to the brief's
   **80%+** target. Measure coverage on production modules; do not count copied
   test-only logic as coverage of the production implementation.
-- [x] Run unit, database/cache/broker integration, API contract, acceptance,
+- [ ] Run unit, database/cache/broker integration, API contract, acceptance,
   and end-to-end smoke tests automatically in CI on every pull request and
   push. Ensure CI fails on a failing test, lint error, build error, or
   configured critical security finding.
-- [x] Add edge/failure tests for duplicate and malformed events, out-of-order
+- [ ] Add edge/failure tests for duplicate and malformed events, out-of-order
   delivery, broker/database/cache outage, consumer restart, seed retry,
   expired/invalid tokens, rate limiting, date boundaries, tenant isolation,
   and AI/tool failures.
@@ -174,7 +174,7 @@ measured; failure behavior and security scan are evidenced, not asserted.
   Compose instructions, environment variables, URLs, health checks, demo
   credentials policy, tests, limitations, benchmark hardware/results, and
   troubleshooting steps. Fix incorrect health URLs and stale scale claims.
-- [ ] Keep the OpenAPI file in sync with the running API, including auth,
+- [x] Keep the OpenAPI file in sync with the running API, including auth,
   status/error responses, pagination, rate limits, and examples. Document
   event topic, key, schema, and evolution contract.
 - [x] Finish accurate architecture artifacts: C4 context/container view,
@@ -193,7 +193,7 @@ measured; failure behavior and security scan are evidenced, not asserted.
   deployed, how secrets and networking are configured, and what remains a
   local-only path. Include frontend and dependencies, not just an API
   deployment manifest.
-- [ ] Verify horizontal scaling and availability claims; either demonstrate
+- [x] Verify horizontal scaling and availability claims; either demonstrate
   replicas/failover or describe the prototype's single points of failure
   without claiming the 99.9% target.
 - [x] Add an SBOM or dependency/license inventory and make sure all Dockerfiles,

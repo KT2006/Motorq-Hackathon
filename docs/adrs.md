@@ -44,3 +44,12 @@
 **Decision:** Groq-hosted LLM (llama/mixtral) with tool-calling. Two tools: get_fleet_offenders and get_vehicle_cost_summary. Bounded loop (max 5 iterations, 30s timeout).  
 **Alternatives Considered:** Vector-store RAG (overkill for structured data), text-to-SQL (injection risk), pre-computed answers.  
 **Consequences:** Grounded in real data (tool results, not hallucinations). Read-only tools prevent data mutation. Audit trail via agent_logs table. Trade-off: depends on external LLM API availability; graceful fallback added.
+
+## Storage Role Justification
+
+| Store | Role | Why This Store | Failure Behavior |
+|-------|------|----------------|------------------|
+| PostgreSQL (TimescaleDB) | Telemetry, trips, idles, costs, audit | SQL joins for cost rollup, ACID for idempotent writes, TimescaleDB for time-series compression | Consumer retries on connection failure; ON CONFLICT prevents double-counting |
+| Redis | Live vehicle status cache | Sub-ms reads for dashboard polling, TTL for stale data cleanup | Dashboard shows "no stream data yet" if Redis unavailable; non-critical path |
+| Redpanda | Event streaming | Kafka-compatible log for replay/reprocessing, consumer groups for parallelism | Consumer lag increases during outage; drains on recovery; no data loss with committed offsets |
+| No vector store | AI agent uses tool-calling, not RAG | Structured fleet data is better served by SQL queries than semantic search | N/A |

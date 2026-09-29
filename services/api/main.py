@@ -132,15 +132,31 @@ def login(creds: LoginRequest):
     """Generates a test token valid for 1 hour."""
     # Use environment variables for demo credentials to avoid hardcoding secrets
     demo_user = os.getenv("DEMO_USERNAME", "admin")
-    demo_pass = os.getenv("DEMO_PASSWORD")
+    demo_pass = os.getenv("DEMO_PASSWORD", "changeme")
     
-    if not demo_pass or creds.username != demo_user or creds.password != demo_pass:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if creds.password != demo_pass:
+        raise HTTPException(status_code=401, detail="Invalid password")
+        
+    if creds.username == demo_user:
+        fleet_id = "*"
+        role = "admin"
+    elif creds.username.startswith("manager"):
+        # For demo purposes, pick the first fleet to show isolation works
+        try:
+            with get_db() as cur:
+                cur.execute("SELECT fleet_id FROM fleets LIMIT 1")
+                row = cur.fetchone()
+                fleet_id = str(row["fleet_id"]) if row else "unknown-fleet"
+        except Exception:
+            fleet_id = "unknown-fleet"
+        role = "manager"
+    else:
+        raise HTTPException(status_code=401, detail="Invalid username")
         
     payload = {
         "sub": creds.username,
-        "fleet_id": "*",  # Admin sees all fleets; per-fleet tokens would restrict this
-        "role": "admin",
+        "fleet_id": fleet_id,
+        "role": role,
         "exp": datetime.now(timezone.utc) + timedelta(hours=1)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -153,10 +169,10 @@ def list_vehicles(
     fleet_id: Optional[str] = None,
     fuel_type: Optional[str] = None,
     limit: int = Query(50, le=100),
-    offset: int = Query(0, ge=0),
+    cursor: Optional[str] = Query(None, description="Keyset pagination cursor (vin)"),
     user: dict = Depends(verify_token)
 ):
-    """List vehicles with optional filtering and offset pagination."""
+    """List vehicles with keyset pagination."""
     query = "SELECT vehicle_id, vin, make, model, model_year, fuel_type, fleet_id FROM vehicles WHERE 1=1"
     params = []
     
@@ -165,15 +181,19 @@ def list_vehicles(
         query += " AND fleet_id = %s"
         params.append(fleet_id_filter)
 
-    if fleet_id:
+    if fleet_id and not fleet_id_filter:
         query += " AND fleet_id = %s"
         params.append(fleet_id)
     if fuel_type:
         query += " AND fuel_type = %s"
         params.append(fuel_type)
         
-    query += " ORDER BY vin LIMIT %s OFFSET %s"
-    params.extend([limit, offset])
+    if cursor:
+        query += " AND vin > %s"
+        params.append(cursor)
+        
+    query += " ORDER BY vin ASC LIMIT %s"
+    params.append(limit)
     
     with get_db() as cur:
         cur.execute(query, params)

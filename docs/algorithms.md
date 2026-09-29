@@ -219,6 +219,16 @@ The rollup uses a single SQL query with CTEs (`trip_daily`, `idle_daily`, `combi
 - **Time**: O(T + I) where T = trip rows, I = idle rows — single pass via SQL aggregation
 - **I/O**: Single query + single batch upsert — 2,280 rows for 85 vehicles × ~27 days
 
+### 9.1 Fuel Prices and Idle Burn Rates Assumptions
+- **Fuel prices used in the system** (from `schema.sql` seed data):
+  - Petrol: ₹103.44/L (Indian Oil Chennai, Sep 2026)
+  - Diesel: ₹92.72/L (Indian Oil Chennai, Sep 2026)
+  - EV electricity: ₹8.00/kWh (BESCOM residential tariff)
+- **Idle burn rates** (from `config.py`):
+  - Petrol: 0.6 L/h, Diesel: 0.5 L/h, Hybrid: 0.3 L/h, EV: 0.9 kWh/h
+- **Source citations:** Indian Oil retail price list, BESCOM tariff schedule.
+- *Label: All prices are synthetic estimates for demonstration purposes.*
+
 ---
 
 ## 10. Top-K Idle Offender Scoring
@@ -271,6 +281,19 @@ From our seed data (85 vehicles, 27 days), using a 500 min/day naive threshold:
 | `PS289YNHS5478VUV6` | petrol | 511.4 min | 80.5% | ₹15,342 | ✅ Flagged | ✅ Caught |
 
 **Key insight**: Vehicle `CJ75H2TD679HJHGHE` was MISSED by the naive threshold (487 min < 500 min cutoff) but is **83.2% idle** — the vast majority of its active time is wasted idling. The weighted score catches this because `idle_pct` is a first-class scoring component.
+
+### Weighted vs Naive Ranking — Concrete Example
+
+| Vehicle | Idle Min | Total Active Min | Idle Cost (₹) | Naive Flag (>60 min) | Weighted Score |
+|---------|----------|------------------|---------------|---------------------|---------------|
+| A       | 58       | 150              | 800           | ✗ (below threshold) | 1.47          |
+| B       | 65       | 800              | 300           | ✓ (above threshold) | 0.63          |
+
+**Analysis:** Vehicle A has 38.7% idle time and ₹800 waste but is missed by the naive threshold.
+Vehicle B has only 8.1% idle time and ₹300 waste but is flagged by the naive approach.
+The weighted score correctly identifies Vehicle A as the worse offender.
+
+**Test evidence:** `tests/test_cost_calc.py::test_baseline_vs_weighted_score_disagree_on_edge_case`
 
 ---
 

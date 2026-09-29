@@ -182,3 +182,24 @@ This works because the `ORDER BY … LIMIT` can start directly at the right posi
 The brief asks: "why does a single SQL database fail at scale?" The honest answer for this workload: **it doesn't fail if you do it right.** PostgreSQL handles 36.5M rows in `cost_summary_daily` fine — the danger is querying it *naively* (full table scans on every dashboard load). The combination of covering indexes (for aggregation queries), materialized views (for pre-computed dashboards), and keyset pagination (for API depth) keeps every user-facing query under 10ms regardless of table size.
 
 What *would* break: `telemetry_events` at 100K vehicles × 365 days × ~300 events/day = ~11 billion rows. That's where you'd need partitioning (by month or by vin range) or a columnar store. But the downstream tables (`trips`, `idle_events`, `cost_summary_daily`) that the API/dashboard actually query are 1000x smaller and don't need exotic solutions — just correct indexes.
+
+---
+
+## 8. Data Partitioning Strategy
+
+- **Partition key:** `vin` for `telemetry_events` (each vehicle's data is independent for segmentation)
+- **Time-based partitioning:** TimescaleDB hypertable on `ts` column for `telemetry_events`
+- **Hot/warm/cold retention:** 
+  - Hot = last 30 days (frequently queried)
+  - Warm = 30-90 days
+  - Cold = archived to compressed chunks
+- **Storage estimates:** ~50 bytes/event × 100K vehicles × 300 events/vehicle/day × 30 days = ~45 GB/month
+- **Indexes:** 
+  - `(vin, ts, seq)` unique index for dedup
+  - `(ts DESC)` for time-range queries
+  - `(vin)` for vehicle-specific queries
+- **Query optimization notes:**
+  - Fleet summary uses materialized view `monthly_fleet_cost` (pre-aggregated)
+  - Offender ranking uses pre-computed `cost_summary_daily` (avoids scanning telemetry)
+  - Vehicle cost drill-down queries `cost_summary_daily` by `vehicle_id` + date range (index-only scan)
+  - Telemetry is only scanned during segmentation (batch process, not API request path)

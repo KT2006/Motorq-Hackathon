@@ -91,9 +91,23 @@ See `/docs/load-test-results.md` for results.
 | [`docs/load-test-results.md`](docs/load-test-results.md) | Locust load test results |
 | [`docs/openapi.json`](docs/openapi.json) | Full OpenAPI 3.1 spec |
 
+## Benchmark Environment
+
+| Parameter | Default Value | Configurable Via |
+|-----------|--------------|------------------|
+| Seed vehicles | 50 | `SEED_VEHICLES` env var |
+| Seed days | 14 | `SEED_DAYS` env var |
+| Stream events | 60 | `SEED_STREAM_EVENTS` env var |
+| Docker resources | 2 CPU / 4 GB RAM recommended | Docker Desktop settings |
+| Startup command | `docker compose up --build` | |
+| API base URL | http://localhost:80 (via nginx) | `VITE_API_BASE` |
+| Timezone | UTC (all timestamps) | |
+| Demo login | admin / (set via DEMO_PASSWORD) | `.env` |
+
 ## Known Limitations / Honest Disclosures
 
 - **Demo scale:** The seeder generates 50 vehicles × 14 days by default (configurable via `SEED_VEHICLES` and `SEED_DAYS` in `.env`). Full 100K-vehicle scale is not run locally due to hardware constraints; the simulator architecture supports it via a `multiprocessing.Pool` sharding strategy (see `simulator/data_simulator.py` docstring).
+- **Horizontal Scaling:** Single Postgres instance (SPOF) — production would use read replicas. Single Redis instance — production would use Redis Cluster. Consumer can be horizontally scaled via Kafka consumer groups (3 partitions by default). API can be horizontally scaled behind a load balancer (stateless). Dashboard is stateless nginx — easily replicated.
 - **VITE_* security:** Demo credentials in `VITE_DEMO_PASSWORD` are embedded in the built JS bundle — appropriate for a hackathon demo, not for production (where a login form + server-side session would replace this). Note that the dashboard actually uses a login form which does a POST to `/token`; the `VITE_DEMO_PASSWORD` is passed at build-time only to auto-fill the login form for convenience.
 - **Container vulnerabilities:** The Trivy scan (`docs/trivy_scan_api.txt`) reports 44 high-severity findings — all in base OS packages. These are acknowledged technical debt; a production release would pin base images to hardened variants.
 - **TLS:** Supabase connections enforce TLS by default; local Docker networking is plaintext (acceptable for local dev only).

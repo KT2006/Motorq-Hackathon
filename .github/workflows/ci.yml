@@ -55,15 +55,38 @@ jobs:
 
       - name: Lint
         working-directory: dashboard
-        run: npm run lint || true
+        run: npm run lint
 
       - name: Build
         working-directory: dashboard
         env:
           VITE_API_BASE: /api
-          VITE_DEMO_USERNAME: admin
-          VITE_DEMO_PASSWORD: ci-test-password
         run: npm run build
+
+  integration-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start full stack
+        run: docker compose up --build -d
+
+      - name: Wait for API health
+        run: |
+          echo "Waiting for API..."
+          timeout 60 bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
+          echo "API is healthy!"
+
+      - name: Wait for Seed to finish
+        run: |
+          echo "Waiting for Seeder..."
+          timeout 120 bash -c 'until docker logs fleet-seeder 2>&1 | grep -q "seed_and_run complete"; do sleep 5; done'
+          echo "Seeder finished!"
+
+      - name: Run Smoke Tests
+        run: |
+          pip install pytest httpx
+          API_BASE_URL=http://localhost:8000 DEMO_USERNAME=admin DEMO_PASSWORD=changeme pytest tests/test_smoke.py -v
 
   docker-build:
     runs-on: ubuntu-latest
