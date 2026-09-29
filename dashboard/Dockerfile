@@ -11,7 +11,11 @@ COPY . .
 # Accept VITE_API_BASE as a build-time arg so the API URL is baked into
 # the static bundle. Falls back to /api (nginx reverse proxy) if unset.
 ARG VITE_API_BASE=/api
+ARG VITE_DEMO_USERNAME=admin
+ARG VITE_DEMO_PASSWORD
 ENV VITE_API_BASE=$VITE_API_BASE
+ENV VITE_DEMO_USERNAME=$VITE_DEMO_USERNAME
+ENV VITE_DEMO_PASSWORD=$VITE_DEMO_PASSWORD
 
 RUN npm run build
 
