@@ -2,7 +2,7 @@
 
 ## API Security
 
-- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header. The dashboard auto-authenticates using demo credentials configured via `DEMO_PASSWORD` (server-side env var, not embedded in code).
+- **Authentication**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header. For this hackathon demo, Compose passes `DEMO_PASSWORD` to the dashboard build as `VITE_DEMO_PASSWORD`, which is embedded in the public JavaScript bundle; do not use this credential flow with sensitive data or in production.
 - **Rate Limiting**: Implemented via SlowAPI. Core analytical endpoints are limited to `100/minute`; the `/chat` AI endpoint is limited to `20/minute` to prevent abuse of the LLM API.
 - **Encryption in Transit**: Supabase connections enforce TLS by default. Local Docker networking uses plaintext (acceptable for local dev only; a production deploy behind a load balancer or reverse proxy would terminate TLS there).
 - **CORS**: Currently set to `allow_origins=["*"]` — appropriate for a hackathon demo; a production deployment would scope this to the specific dashboard origin.

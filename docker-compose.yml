@@ -136,7 +136,9 @@ services:
     build:
       context: ./dashboard
       args:
-        VITE_API_BASE: /api
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_DEMO_USERNAME: ${DEMO_USERNAME:-admin}
+        VITE_DEMO_PASSWORD: ${DEMO_PASSWORD:?Set DEMO_PASSWORD in .env for dashboard demo auth}
     ports:
       - "80:80"
     depends_on:
