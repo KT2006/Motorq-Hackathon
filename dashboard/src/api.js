@@ -12,10 +12,11 @@ export const initAuth = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        username: import.meta.env.VITE_DEMO_USERNAME || 'admin',
-        password: import.meta.env.VITE_DEMO_PASSWORD
+        username: 'admin',
+        password: prompt("Enter demo password (changeme):") || 'changeme'
       })
     });
+    if (!res.ok) throw new Error("Auth failed");
     const data = await res.json();
     token = data.access_token;
     return token;
