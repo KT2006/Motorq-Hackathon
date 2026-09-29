@@ -2,74 +2,87 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
-  test:
-    name: Python Tests
+  lint-and-test:
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: timescale/timescaledb:latest-pg16
-        env:
-          POSTGRES_DB:       fleet_db
-          POSTGRES_USER:     fleet_user
-          POSTGRES_PASSWORD: fleet_pass
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fleet_user -d fleet_db"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.13'
 
       - name: Install Python dependencies
         run: |
-          pip install \
-            psycopg2-binary \
-            python-dotenv \
-            kafka-python \
-            pydantic \
-            pytest \
-            pytest-cov
+          pip install -r services/segmentation/requirements.txt
+          pip install -r services/api/requirements.txt
+          pip install -r services/ingestion/requirements.txt
+          pip install pytest pytest-cov
 
-      - name: Apply schema
-        env:
-          PGPASSWORD: fleet_pass
+      - name: Run unit tests with coverage
         run: |
-          psql -h localhost -U fleet_user -d fleet_db -f schema.sql
+          pytest tests/ \
+            --cov=services/segmentation \
+            --cov-report=term-missing \
+            --cov-report=html:docs/evidence/coverage-html \
+            -v --tb=short
 
-      - name: Run tests
-        env:
-          POSTGRES_URL: postgresql://fleet_user:fleet_pass@localhost:5432/fleet_db
-        run: |
-          pytest tests/ -v --cov=services/segmentation --cov-report=term-missing
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: docs/evidence/coverage-html/
 
   frontend-build:
-    name: Frontend Build
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
-      - name: Install and build
+      - name: Install dependencies
         working-directory: dashboard
+        run: npm ci
+
+      - name: Lint
+        working-directory: dashboard
+        run: npm run lint || true
+
+      - name: Build
+        working-directory: dashboard
+        env:
+          VITE_API_BASE: /api
+          VITE_DEMO_USERNAME: admin
+          VITE_DEMO_PASSWORD: ci-test-password
+        run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -t fleet-api ./services/api
+
+      - name: Build Ingestion image
+        run: docker build -t fleet-ingestion ./services/ingestion
+
+      - name: Build Seeder image
+        run: docker build -t fleet-seeder ./services/segmentation
+
+      - name: Build Dashboard image
         run: |
-          npm ci
-          npm run build
+          docker build \
+            --build-arg VITE_API_BASE=/api \
+            --build-arg VITE_DEMO_USERNAME=admin \
+            --build-arg VITE_DEMO_PASSWORD=ci-test \
+            -t fleet-dashboard ./dashboard

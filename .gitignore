@@ -1,7 +1,46 @@
-plan.md
+# Environment
 .env
+.env.local
+.env.*.local
+
+# Python
 __pycache__/
-*.csv
 *.pyc
+*.pyo
 .pytest_cache/
-my-context
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Node
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+
+# Data
+*.csv
+*.parquet
+seed_data_test/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+postgres_data/
+
+# Docs - generated
+docs/evidence/*.log
+
+# Internal planning
+plan.md
+my-context/

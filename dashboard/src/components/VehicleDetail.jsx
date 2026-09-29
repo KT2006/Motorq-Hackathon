@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { getVehicleCostSummary, getLiveStatus } from '../api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { ArrowLeft, Radio } from 'lucide-react';
@@ -115,17 +115,15 @@ function LiveStatusCard({ vin }) {
 export default function VehicleDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  // We also need the VIN (not UUID) to query live-status.
-  // The cost-summary response doesn''t include VIN, so we read it from the URL
-  // state passed by the Leaderboard (stored in location.state.vin).
-  // Fallback: use the id itself if it looks like a VIN (17 chars).
-  const vin = id.length === 17 ? id : null;
+  const [vin, setVin] = useState(location.state?.vin || null);
 
   useEffect(() => {
     getVehicleCostSummary(id).then(res => {
       setData(res.data);
+      setVin(res.vin);
       setLoading(false);
     }).catch(err => {
       console.error(err);

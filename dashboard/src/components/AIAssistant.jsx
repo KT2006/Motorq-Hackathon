@@ -32,8 +32,8 @@ export default function AIAssistant() {
     try {
       const response = await api.post('/chat', {
         query: userQuery,
-        from_date: '2026-08-28',
-        to_date: '2026-09-26'
+        from_date: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
+        to_date: new Date().toISOString().slice(0, 10)
       });
 
       const { answer, tool_calls } = response.data;

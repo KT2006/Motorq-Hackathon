@@ -1,3 +1,4 @@
+import json
 import os
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -22,7 +23,7 @@ _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_env_path)
 
 POSTGRES_URL = os.getenv("POSTGRES_URL", "")
-SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-hackathon-key")
+SECRET_KEY = os.getenv("JWT_SECRET", "")
 ALGORITHM = "HS256"
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,12 +32,17 @@ from fastapi.middleware.cors import CORSMiddleware
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Motorq Hackathon API - M7", version="1.0.0")
 
+# In production, restrict to the actual dashboard origin.
+# For the Docker Compose submission, the dashboard proxies through nginx
+# on the same origin, so CORS is only needed for local dev.
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:80,http://localhost:5173,http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.state.limiter = limiter
@@ -46,6 +52,11 @@ import time
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+@app.on_event("startup")
+async def _check_config():
+    if not SECRET_KEY:
+        logging.warning("JWT_SECRET not set — authentication will reject all tokens")
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -87,11 +98,30 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+def get_fleet_filter(user: dict) -> Optional[str]:
+    """Return the fleet_id from the JWT, or None if admin (*) access."""
+    fid = user.get("fleet_id", "*")
+    return None if fid == "*" else fid
+
+def audit_log(user: dict, action: str, resource: str, resource_id: str = None, 
+              details: dict = None, ip: str = None):
+    """Write a structured audit event for sensitive data access."""
+    try:
+        with get_db() as cur:
+            cur.execute("""
+                INSERT INTO audit_log (user_sub, action, resource, resource_id, ip_address, details)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (user.get("sub", "unknown"), action, resource, resource_id, ip, 
+                  json.dumps(details) if details else None))
+            cur.connection.commit()
+    except Exception as e:
+        logging.warning("audit_log_failed: %s", e)
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class LoginRequest(BaseModel):
     username: str
@@ -109,6 +139,8 @@ def login(creds: LoginRequest):
         
     payload = {
         "sub": creds.username,
+        "fleet_id": "*",  # Admin sees all fleets; per-fleet tokens would restrict this
+        "role": "admin",
         "exp": datetime.now(timezone.utc) + timedelta(hours=1)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -128,6 +160,11 @@ def list_vehicles(
     query = "SELECT vehicle_id, vin, make, model, model_year, fuel_type, fleet_id FROM vehicles WHERE 1=1"
     params = []
     
+    fleet_id_filter = get_fleet_filter(user)
+    if fleet_id_filter:
+        query += " AND fleet_id = %s"
+        params.append(fleet_id_filter)
+
     if fleet_id:
         query += " AND fleet_id = %s"
         params.append(fleet_id)
@@ -154,6 +191,7 @@ def vehicle_cost_summary(
     user: dict = Depends(verify_token)
 ):
     """Get daily cost breakdown for a specific vehicle over a date range."""
+    audit_log(user, "read", "vehicle_cost", vehicle_id, ip=request.client.host)
     try:
         UUID(vehicle_id)
     except ValueError:
@@ -223,7 +261,14 @@ def top_offenders(
     Top-K worst offenders by weighted score over a date range.
     Reuses the M5 scoring logic.
     """
-    query = """
+    fleet_id_filter = get_fleet_filter(user)
+    params = [from_date, to_date]
+    fleet_clause = ""
+    if fleet_id_filter:
+        fleet_clause = "AND v.fleet_id = %s"
+        params.append(fleet_id_filter)
+
+    query = f"""
     WITH daily_scores AS (
         SELECT cs.vehicle_id, v.vin, v.fuel_type, cs.total_drive_min, cs.total_idle_min,
                cs.idle_cost, cs.fuel_cost, cs.utilisation_pct,
@@ -235,6 +280,7 @@ def top_offenders(
         FROM cost_summary_daily cs
         JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
         WHERE cs.summary_date BETWEEN %s AND %s
+        {fleet_clause}
     ),
     vehicle_agg AS (
         SELECT vehicle_id, vin, fuel_type,
@@ -260,8 +306,9 @@ def top_offenders(
     ORDER BY weighted_score DESC
     LIMIT %s
     """
+    params.append(limit)
     with get_db() as cur:
-        cur.execute(query, (from_date, to_date, limit))
+        cur.execute(query, tuple(params))
         rows = cur.fetchall()
         
     return {"data": rows, "limit": limit}
@@ -295,6 +342,7 @@ def health_check():
 @limiter.limit("100/minute")
 def get_live_status(request: Request, vin: str, user: dict = Depends(verify_token)):
     """Fetch live, ephemeral vehicle status from Redis."""
+    audit_log(user, "read", "live_status", vin, ip=request.client.host)
     try:
         status = redis_client.hgetall(f"vehicle:{vin}:status")
         if not status:
@@ -320,8 +368,8 @@ from openai import OpenAI
 
 class ChatRequest(BaseModel):
     query: str
-    from_date: str = "2026-08-28"
-    to_date: str = "2026-09-26"
+    from_date: str = Field(default_factory=lambda: (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d"))
+    to_date: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
 def run_agent_loop(query: str, from_date: str, to_date: str):
     # Using Groq's free API which is OpenAI-compatible
@@ -374,13 +422,25 @@ def run_agent_loop(query: str, from_date: str, to_date: str):
     max_loops = 5
     tool_calls_log = []
     
+    agent_start = time.time()
+    MAX_AGENT_SECONDS = 30
+    
     for i in range(max_loops):
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto"
-        )
+        if time.time() - agent_start > MAX_AGENT_SECONDS:
+            return "Analysis timed out. Please try a simpler question.", tool_calls_log
+
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                timeout=15,
+            )
+        except Exception as llm_err:
+            logging.error("LLM API call failed: %s", llm_err)
+            return f"I'm unable to connect to the AI service right now. Error: {str(llm_err)}", tool_calls_log
+
         msg = response.choices[0].message
         messages.append(msg)
         
@@ -398,7 +458,7 @@ def run_agent_loop(query: str, from_date: str, to_date: str):
                 if func_name == "get_fleet_offenders":
                     # Re-use our existing logic
                     # To avoid passing request object, we just call the inner logic or copy the query
-                    limit = args.get("limit", 10)
+                    limit = min(max(1, int(args.get("limit", 10))), 50)  # Clamp 1-50
                     with get_db() as cur:
                         cur.execute("""
                             WITH daily_scores AS (
@@ -447,6 +507,7 @@ def chat_with_agent(
     payload: ChatRequest,
     user: dict = Depends(verify_token)
 ):
+    audit_log(user, "ai_query", "chat", details={"query": payload.query}, ip=request.client.host)
     if not os.getenv("GROQ_API_KEY") and not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="GROQ_API_KEY or OPENAI_API_KEY not configured on server")
         

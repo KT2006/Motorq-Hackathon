@@ -72,7 +72,7 @@ export default function Leaderboard() {
                 <tr 
                   key={row.vin} 
                   className="table-row-clickable"
-                  onClick={() => navigate(`/vehicle/${row.vehicle_id}`)}
+                  onClick={() => navigate(`/vehicle/${row.vehicle_id}`, { state: { vin: row.vin } })}
                 >
                   <td>
                     <span className={`badge ${idx < 3 ? 'badge-danger' : 'badge-warning'}`}>

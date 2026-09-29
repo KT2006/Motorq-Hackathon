@@ -47,13 +47,17 @@ const fetchAPI = async (endpoint, options = {}) => {
   return res.json();
 };
 
-export const getFleetSummary = (month = '2026-08-01') =>
+const today = () => new Date().toISOString().slice(0, 10);
+const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+const monthStart = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`; };
+
+export const getFleetSummary = (month = monthStart()) =>
   fetchAPI(`/fleet/summary?month=${month}`);
 
-export const getTopOffenders = (limit = 10, from = '2026-08-28', to = '2026-09-26') =>
+export const getTopOffenders = (limit = 10, from = daysAgo(30), to = today()) =>
   fetchAPI(`/fleet/offenders?limit=${limit}&from_date=${from}&to_date=${to}`);
 
-export const getVehicleCostSummary = (vehicleId, from = '2026-08-28', to = '2026-09-26') =>
+export const getVehicleCostSummary = (vehicleId, from = daysAgo(30), to = today()) =>
   fetchAPI(`/vehicles/${vehicleId}/cost-summary?from_date=${from}&to_date=${to}`);
 
 /** Fetch live ephemeral vehicle status from Redis via the API (polyglot store demo). */

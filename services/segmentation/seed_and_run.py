@@ -29,6 +29,9 @@ from pathlib import Path
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
+from segment import segment_vehicle, fetch_distinct_vins as _fetch_vins
+from segment import clear_results_for_vin, insert_trips, insert_idle_events, fetch_telemetry_for_vin
+from cost_engine import run_rollup, seed_idle_burn_rates, AVAILABLE_MIN_PER_DAY
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent / ".env")
 
@@ -234,168 +237,39 @@ def _flush_telemetry(conn, rows):
 # ─── segmentation + cost ──────────────────────────────────────────────────────
 
 def run_segmentation(conn):
-    """Lightweight re-implementation so seeder has no import dependency on segment.py."""
-    log.info("running segmentation for all vehicles...")
+    """Run canonical M4 segmentation engine for all vehicles."""
+    log.info("running canonical M4 segmentation for all vehicles...")
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT vin FROM telemetry_events")
-        vins = [r[0] for r in cur.fetchall()]
-
-    log.info("segmenting %d VINs", len(vins))
-    for vin in vins:
-        _segment_vin(conn, vin.strip())
-    conn.commit()
-    log.info("segmentation_done vins=%d", len(vins))
-
-def _segment_vin(conn, vin: str):
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        # Clear old results (idempotent re-run)
-        cur.execute("DELETE FROM idle_events WHERE vin = %s", (vin,))
-        cur.execute("DELETE FROM trips WHERE vin = %s", (vin,))
         cur.execute("""
-            SELECT ts, lat, lon, speed_kmh, odo_km, ignition_status, evt, seq
-            FROM telemetry_events WHERE vin = %s
-            ORDER BY ts ASC, seq ASC
-        """, (vin,))
-        rows = cur.fetchall()
+            SELECT v.vin, v.fuel_type
+            FROM vehicles v
+            WHERE EXISTS (SELECT 1 FROM telemetry_events te WHERE te.vin = v.vin LIMIT 1)
+            ORDER BY v.vin
+        """)
+        vin_list = cur.fetchall()
 
-    if not rows:
-        return
-
-    SPEED_THRESH = 3.0
-    MIN_IDLE_SEC = 60
-    MAX_INTIP_IDLE_SEC = 900
-
-    state = "NOT_IN_TRIP"
-    trip = None
-    idle = None
-    trips_out = []
-    idles_out = []
-    speed_samples = []
-
-    for r in rows:
-        ts = r["ts"]
-        lat, lon = r["lat"], r["lon"]
-        speed = float(r["speed_kmh"])
-        odo = float(r["odo_km"])
-        ign = r["ignition_status"]
-        evt = r["evt"]
-
-        if state == "NOT_IN_TRIP":
-            if evt == "TRIP_START" or (speed > SPEED_THRESH and ign):
-                trip = {"vin": vin, "start_ts": ts, "start_lat": lat, "start_lon": lon,
-                        "start_odo": odo, "fuel_start": None}
-                speed_samples = [speed]
-                state = "DRIVING"
-        elif state == "DRIVING":
-            speed_samples.append(speed)
-            if evt == "TRIP_END" or not ign:
-                _close_trip(trip, ts, lat, lon, odo, speed_samples, trips_out)
-                trip = None
-                state = "NOT_IN_TRIP"
-            elif speed <= SPEED_THRESH and ign:
-                idle = {"vin": vin, "trip_id": None, "start_ts": ts, "lat": lat, "lon": lon,
-                        "idle_type": "in_trip"}
-                state = "IN_TRIP_IDLE"
-        elif state == "IN_TRIP_IDLE":
-            idle_secs = (ts - idle["start_ts"]).total_seconds() if hasattr(ts, "total_seconds") else \
-                        (ts - idle["start_ts"]).total_seconds() if isinstance(ts, datetime) else 0
-            try:
-                idle_secs = (ts - idle["start_ts"]).total_seconds()
-            except Exception:
-                idle_secs = 0
-            if idle_secs > MAX_INTIP_IDLE_SEC or evt == "TRIP_END" or not ign:
-                idles_out.append({**idle, "end_ts": ts,
-                                   "duration_min": round(idle_secs / 60, 2),
-                                   "fuel_burned_l": None, "energy_burned_kwh": None})
-                _close_trip(trip, ts, lat, lon, odo, speed_samples, trips_out)
-                trip = None
-                idle = None
-                state = "NOT_IN_TRIP"
-            elif speed > SPEED_THRESH:
-                idle_secs2 = (ts - idle["start_ts"]).total_seconds()
-                if idle_secs2 >= MIN_IDLE_SEC:
-                    idles_out.append({**idle, "end_ts": ts,
-                                       "duration_min": round(idle_secs2 / 60, 2),
-                                       "fuel_burned_l": None, "energy_burned_kwh": None})
-                idle = None
-                speed_samples.append(speed)
-                state = "DRIVING"
-
-    # Flush results
-    with conn.cursor() as cur:
-        for t in trips_out:
-            cur.execute("""
-                INSERT INTO trips
-                  (vin, start_ts, end_ts, start_lat, start_lon, end_lat, end_lon,
-                   distance_km, duration_min, avg_speed_kmh, idle_duration_min)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (t["vin"], t["start_ts"], t["end_ts"],
-                  t["start_lat"], t["start_lon"], t["end_lat"], t["end_lon"],
-                  t["distance_km"], t["duration_min"], t["avg_speed_kmh"], 0))
-        for ie in idles_out:
-            cur.execute("""
-                INSERT INTO idle_events
-                  (vin, start_ts, end_ts, duration_min, lat, lon, idle_type)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
-            """, (ie["vin"], ie["start_ts"], ie["end_ts"],
-                  ie["duration_min"], ie["lat"], ie["lon"], ie["idle_type"]))
-
-def _close_trip(trip, end_ts, end_lat, end_lon, end_odo, speed_samples, trips_out):
-    if trip is None:
-        return
-    dur_sec = (end_ts - trip["start_ts"]).total_seconds()
-    dist = max(0, round(end_odo - trip["start_odo"], 2))
-    avg_spd = round(sum(speed_samples) / len(speed_samples), 2) if speed_samples else 0
-    trips_out.append({
-        "vin": trip["vin"], "start_ts": trip["start_ts"], "end_ts": end_ts,
-        "start_lat": trip["start_lat"], "start_lon": trip["start_lon"],
-        "end_lat": end_lat, "end_lon": end_lon,
-        "distance_km": dist, "duration_min": round(dur_sec / 60, 2),
-        "avg_speed_kmh": avg_spd,
-    })
+    log.info("segmenting %d VINs using canonical segment.py", len(vin_list))
+    total_trips, total_idles = 0, 0
+    for vin, fuel_type in vin_list:
+        vin = vin.strip()
+        rows = fetch_telemetry_for_vin(conn, vin)
+        if not rows:
+            continue
+        trips, idles = segment_vehicle(rows, vin, fuel_type)
+        clear_results_for_vin(conn, vin)
+        insert_trips(conn, trips)
+        insert_idle_events(conn, idles)
+        total_trips += len(trips)
+        total_idles += len(idles)
+    conn.commit()
+    log.info("segmentation_done vins=%d trips=%d idles=%d", len(vin_list), total_trips, total_idles)
 
 def run_cost_rollup(conn):
-    """Simple daily cost rollup — writes cost_summary_daily."""
-    log.info("running cost rollup...")
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO cost_summary_daily
-              (vehicle_id, summary_date, total_distance_km, total_drive_min,
-               total_idle_min, available_min, fuel_cost, idle_cost, utilisation_pct)
-            SELECT
-                v.vehicle_id,
-                t.trip_date,
-                COALESCE(SUM(t.distance_km), 0),
-                COALESCE(SUM(t.duration_min), 0),
-                COALESCE(SUM(ie.idle_min), 0),
-                1440,
-                COALESCE(SUM(t.distance_km) * 0.09 * 100, 0),  -- ₹100/L petrol approx
-                COALESCE(SUM(ie.idle_min) / 60.0 * 0.6 * 92, 0),  -- diesel idle approx
-                LEAST(100, COALESCE(SUM(t.duration_min) / 1440.0 * 100, 0))
-            FROM vehicles v
-            LEFT JOIN (
-                SELECT vin, date(start_ts) AS trip_date,
-                       SUM(distance_km) AS distance_km, SUM(duration_min) AS duration_min
-                FROM trips
-                GROUP BY vin, date(start_ts)
-            ) t ON t.vin = v.vin
-            LEFT JOIN (
-                SELECT vin, date(start_ts) AS idle_date, SUM(duration_min) AS idle_min
-                FROM idle_events
-                GROUP BY vin, date(start_ts)
-            ) ie ON ie.vin = v.vin AND ie.idle_date = t.trip_date
-            WHERE t.trip_date IS NOT NULL
-            GROUP BY v.vehicle_id, t.trip_date
-            ON CONFLICT (vehicle_id, summary_date) DO UPDATE
-                SET total_distance_km = EXCLUDED.total_distance_km,
-                    total_drive_min   = EXCLUDED.total_drive_min,
-                    total_idle_min    = EXCLUDED.total_idle_min,
-                    fuel_cost         = EXCLUDED.fuel_cost,
-                    idle_cost         = EXCLUDED.idle_cost,
-                    utilisation_pct   = EXCLUDED.utilisation_pct
-        """)
-        conn.commit()
-    log.info("cost_rollup_done")
+    """Run canonical M5 cost rollup engine."""
+    log.info("running canonical M5 cost rollup...")
+    seed_idle_burn_rates(conn)
+    n_rows = run_rollup(conn)
+    log.info("cost_rollup_done rows=%d", n_rows)
     # Refresh the materialized view
     with conn.cursor() as cur:
         cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monthly_fleet_cost")

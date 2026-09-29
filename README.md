@@ -48,7 +48,7 @@ On first run, the `seeder` service automatically:
 
 **Dashboard:** http://localhost:80  
 **API Docs:** http://localhost:8000/docs  
-**API health:** http://localhost:8000/docs
+**API health:** http://localhost:8000/health
 
 > To connect to your existing Supabase dataset instead of the local Postgres, set `POSTGRES_URL=postgresql://user:pass@host:5432/postgres` in `.env`. The local Postgres service is skipped when an external URL is provided.
 
@@ -93,8 +93,8 @@ See `/docs/load-test-results.md` for results.
 
 ## Known Limitations / Honest Disclosures
 
-- **Demo scale:** The seeder generates 50 vehicles × 14 days by default (configurable). Full 100K-vehicle scale is not run locally due to hardware constraints; the simulator architecture supports it via a `multiprocessing.Pool` sharding strategy (see `simulator/data_simulator.py` docstring).
-- **VITE_* security:** Demo credentials in `VITE_DEMO_PASSWORD` are embedded in the built JS bundle — appropriate for a hackathon demo, not for production (where a login form + server-side session would replace this).
+- **Demo scale:** The seeder generates 50 vehicles × 14 days by default (configurable via `SEED_VEHICLES` and `SEED_DAYS` in `.env`). Full 100K-vehicle scale is not run locally due to hardware constraints; the simulator architecture supports it via a `multiprocessing.Pool` sharding strategy (see `simulator/data_simulator.py` docstring).
+- **VITE_* security:** Demo credentials in `VITE_DEMO_PASSWORD` are embedded in the built JS bundle — appropriate for a hackathon demo, not for production (where a login form + server-side session would replace this). Note that the dashboard actually uses a login form which does a POST to `/token`; the `VITE_DEMO_PASSWORD` is passed at build-time only to auto-fill the login form for convenience.
 - **Container vulnerabilities:** The Trivy scan (`docs/trivy_scan_api.txt`) reports 44 high-severity findings — all in base OS packages. These are acknowledged technical debt; a production release would pin base images to hardened variants.
 - **TLS:** Supabase connections enforce TLS by default; local Docker networking is plaintext (acceptable for local dev only).
 

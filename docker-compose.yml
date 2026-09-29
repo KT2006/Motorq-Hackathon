@@ -131,6 +131,12 @@ services:
       JWT_SECRET:   ${JWT_SECRET}
       GROQ_API_KEY: ${GROQ_API_KEY}
       REDIS_HOST:   redis
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   dashboard:
     build:
@@ -142,7 +148,8 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

@@ -401,6 +401,28 @@ ON agent_logs (created_at DESC);
 
 
 -- ============================================================
+-- 9a. AUDIT LOG
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    log_id          BIGSERIAL PRIMARY KEY,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_sub        TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    resource        TEXT NOT NULL,
+    resource_id     TEXT,
+    ip_address      TEXT,
+    details         JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_created
+ON audit_log (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_user
+ON audit_log (user_sub);
+
+
+-- ============================================================
 -- 10. MONTHLY FLEET COST MATERIALIZED VIEW
 --
 -- Pre-aggregated by (fleet_id, month) for the /fleet/summary

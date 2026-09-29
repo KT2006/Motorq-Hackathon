@@ -28,6 +28,7 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 TELEMETRY_TOPIC = os.getenv("TELEMETRY_TOPIC", "telemetry")
+DLQ_TOPIC = os.getenv("DLQ_TOPIC", "telemetry-dlq")
 CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "telemetry-ingestion-v1")
 BATCH_SIZE = int(os.getenv("INGEST_BATCH_SIZE", "500"))
 POLL_TIMEOUT_MS = int(os.getenv("INGEST_POLL_TIMEOUT_MS", "1000"))
@@ -58,6 +59,36 @@ INSERT_SQL = """
     VALUES %s
     ON CONFLICT (vin, ts, seq) DO NOTHING
 """
+
+
+_dlq_producer = None
+
+def get_dlq_producer():
+    global _dlq_producer
+    if _dlq_producer is None:
+        from kafka import KafkaProducer
+        _dlq_producer = KafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        )
+    return _dlq_producer
+
+
+def send_to_dlq(record, error_detail: str) -> None:
+    """Send a malformed event to the dead-letter topic for later recovery."""
+    try:
+        dlq_event = {
+            "original_topic": record.topic,
+            "original_partition": record.partition,
+            "original_offset": record.offset,
+            "original_value": record.value,
+            "error": error_detail,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        get_dlq_producer().send(DLQ_TOPIC, dlq_event)
+        logger.info("dlq_sent topic=%s offset=%s", DLQ_TOPIC, record.offset)
+    except Exception as dlq_err:
+        logger.error("dlq_send_failed offset=%s err=%s", record.offset, dlq_err)
 
 
 def connect_postgres():
@@ -137,6 +168,7 @@ def run() -> None:
                 except ValidationError as error:
                     logger.warning("invalid_event topic=%s partition=%s offset=%s errors=%s",
                                    record.topic, record.partition, record.offset, error.errors())
+                    send_to_dlq(record, str(error.errors()))
 
             try:
                 if valid_events:
