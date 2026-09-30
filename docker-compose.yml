@@ -105,7 +105,7 @@ services:
       REDIS_HOST:             redis
       REDIS_PORT:             "6379"
       TELEMETRY_TOPIC:        telemetry
-      INGEST_BATCH_SIZE:      "500"
+      INGEST_BATCH_SIZE:      "5000"
       LOG_LEVEL:              INFO
     restart: on-failure
 
