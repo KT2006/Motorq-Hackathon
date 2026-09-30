@@ -2,10 +2,13 @@ import os
 import pytest
 import requests
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 DEMO_USERNAME = os.getenv("DEMO_USERNAME", "admin")
-DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "admin")
+DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "changeme")
 
 def is_server_running():
     try:
@@ -61,9 +64,9 @@ class TestSmokeJourney:
         )
         assert offenders_response.status_code == 200, f"Fleet offenders failed: {offenders_response.text}"
         offenders = offenders_response.json()
-        assert len(offenders) > 0, "Expected at least one offender"
+        assert len(offenders.get("data", [])) > 0, "Expected at least one offender"
         
-        first_offender = offenders[0]
+        first_offender = offenders["data"][0]
         assert first_offender.get("weighted_score", 0) > 0, "Expected weighted_score > 0"
         
         vehicle_id = first_offender.get("vehicle_id")
@@ -80,12 +83,13 @@ class TestSmokeJourney:
         
         # 5. Assert cost summary returns data with fuel_cost and idle_cost fields
         # Check based on whether it's a dict summary or a list of records
-        if isinstance(cost_summary, list) and len(cost_summary) > 0:
+        if isinstance(cost_summary, dict) and "data" in cost_summary and len(cost_summary["data"]) > 0:
+            first_cost = cost_summary["data"][0]
+            assert "fuel_cost" in first_cost, "fuel_cost missing in cost summary record"
+            assert "idle_cost" in first_cost, "idle_cost missing in cost summary record"
+        elif isinstance(cost_summary, list) and len(cost_summary) > 0:
             first_cost = cost_summary[0]
             assert "fuel_cost" in first_cost, "fuel_cost missing in cost summary record"
             assert "idle_cost" in first_cost, "idle_cost missing in cost summary record"
-        elif isinstance(cost_summary, dict):
-            assert "fuel_cost" in cost_summary, "fuel_cost missing in cost summary"
-            assert "idle_cost" in cost_summary, "idle_cost missing in cost summary"
         else:
             pytest.fail(f"Unexpected cost summary format or empty: {cost_summary}")

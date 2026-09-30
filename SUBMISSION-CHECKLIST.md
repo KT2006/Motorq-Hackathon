@@ -10,21 +10,36 @@ The brief's numeric targets are acceptance criteria, not claims to copy into
 the report. If a target fails, keep improving the implementation and rerun it;
 do not present an unmeasured target as achieved. Use synthetic data only.
 
+## Latest local run — 2026-09-30
+
+The current working tree was built and started with `docker compose up --build
+-d`. Compose services were running and healthy where health checks are defined;
+the one-shot seeder exited with code 0. The dashboard and API health routes
+returned HTTP 200, login/summary/vehicle-list requests through the dashboard
+proxy returned HTTP 200, and `python -m pytest tests/test_smoke.py -q -rs`
+passed (2 tests). This was a run from the existing working tree and `.env`,
+not a clean-clone acceptance test. It does not prove AI/browser behavior,
+tenant isolation, security, performance targets, or cloud deployment.
+
+Previously checked boxes below were not all backed by requirement-level
+evidence. They have been reset; check an item only after its stated acceptance
+evidence is produced and reviewed.
+
 ## Phase 1 — Baseline and requirement traceability
 
-- [x] Create a requirement matrix from the problem statement and every section
+- [ ] Create a requirement matrix from the problem statement and every section
   of the solution-document template. For each requirement, record its
   implementation path, acceptance test, evidence file, and status.
-- [x] Freeze the benchmark environment and demo scope: hardware, Docker
+- [ ] Freeze the benchmark environment and demo scope: hardware, Docker
   resources, seed size, dates, timezone, API ranges, and exact startup command.
-- [x] Reconcile all conflicting project figures (vehicle counts, event counts,
+- [ ] Reconcile all conflicting project figures (vehicle counts, event counts,
   date ranges, costs, throughput, latency, coverage, and failure rates) against
   reproducible runs. Remove or relabel stale/unverified numbers in the README
   and docs.
-- [x] Review the current commit and worktree. Keep real credentials, generated
+- [ ] Review the current commit and worktree. Keep real credentials, generated
   personal data, and local-only files out of Git; retain only synthetic
   datasets intended for submission.
-- [x] Agree on one canonical implementation for seeding, segmentation, cost
+- [ ] Agree on one canonical implementation for seeding, segmentation, cost
   rollup, API schemas, and benchmark reporting. Record any intentionally
   simplified demo path rather than describing it as production behavior.
 
@@ -37,18 +52,18 @@ evidence destination; there are no contradictory claims in the project docs.
   required values, and start the complete stack with the documented Compose
   command. Confirm health checks, service readiness, seed completion, and
   useful failure logs.
-- [x] Make startup deterministic: the dashboard must not be considered ready
+- [ ] Make startup deterministic: the dashboard must not be considered ready
   before the API and its required seed data are ready. Confirm restart and
   re-seed behavior does not silently duplicate or corrupt data.
-- [x] Use the canonical segmentation and cost-engine code from the seeder;
+- [ ] Use the canonical segmentation and cost-engine code from the seeder;
   remove or reconcile the current simplified duplicate implementations.
-- [x] Align seeded dates with the dashboard's default query dates. Use a
+- [ ] Align seeded dates with the dashboard's default query dates. Use a
   configurable reporting period or derive it from available data; verify empty
   ranges show a clear empty state, not misleading zeroes or broken charts.
 - [ ] Verify browser-to-API routing with the Compose Nginx proxy and confirm
   the token, summary, offender, vehicle-cost, live-status, and chat requests
   return expected status codes and response shapes.
-- [x] Fix the vehicle drill-down identity flow: preserve or retrieve the VIN
+- [ ] Fix the vehicle drill-down identity flow: preserve or retrieve the VIN
   from the vehicle UUID so clicking a leaderboard row can also load live
   status. Test both a vehicle with live data and one without it.
 - [ ] Verify overview → offender leaderboard → vehicle detail → live status →
@@ -70,7 +85,7 @@ the full product journey without manual database fixes or unexplained errors.
   dataset with plausible trips, idling, fuel types, faults, GPS noise, bursts,
   duplicate messages, and out-of-order delivery. Record generation time,
   dataset size, and loaded row counts.
-- [x] Verify event schema validation and evolution. Malformed events must be
+- [ ] Verify event schema validation and evolution. Malformed events must be
   observable and recoverable (for example via a dead-letter path); do not
   silently drop them and then claim lossless processing.
 - [ ] Verify idempotency and ordering end to end: replay duplicates, deliver
@@ -87,11 +102,11 @@ the full product journey without manual database fixes or unexplained errors.
   post-test reconciliation. Provision a capable test environment if a laptop
   cannot meet the target; do not substitute a rate-limit test for a successful
   throughput test.
-- [x] Test data partitioning and scale behavior for telemetry; document
+- [ ] Test data partitioning and scale behavior for telemetry; document
   partition/shard keys, hot/warm/cold retention, storage estimates, and the
   cost assumptions. Add the implementation needed to meet the chosen
   partitioning design rather than describing a hypothetical partition.
-- [x] Keep PostgreSQL, Redis, Redpanda, and the no-vector-store decision
+- [ ] Keep PostgreSQL, Redis, Redpanda, and the no-vector-store decision
   justified by their actual roles and tested failure/consistency behavior.
 
 **Exit gate:** the synthetic scale dataset exists, the streaming pipeline is
@@ -100,18 +115,18 @@ project is explicitly not ready to claim 100% completion.
 
 ## Phase 4 — Correctness, product value, and secure access
 
-- [x] Validate segmentation and cost calculations against hand-checkable
+- [ ] Validate segmentation and cost calculations against hand-checkable
   examples and independent SQL/data checks. Test short/noisy stops, long idles,
   missing markers, midnight boundaries, duplicate events, and multiple fuel
   types. Ensure trips, idle events, and daily rollups reconcile.
-- [x] Use cited regional fuel prices and idle-burn assumptions. Clearly label
+- [ ] Use cited regional fuel prices and idle-burn assumptions. Clearly label
   synthetic estimates, dates, units, and assumptions in the UI and solution
   document. Prove the displayed idle-cost result can be traced to source
   telemetry and a calculation.
-- [x] Prove the weighted offender ranking beats or adds useful signal beyond a
+- [ ] Prove the weighted offender ranking beats or adds useful signal beyond a
   clearly defined naive baseline on reproducible sample data. Explain score
   normalization and weights; show at least one case where the rankings differ.
-- [x] Make the AI assistant strictly use bounded, read-only tools; validate
+- [ ] Make the AI assistant strictly use bounded, read-only tools; validate
   tool arguments and output; cap tool calls and latency; handle unavailable
   LLMs and invalid model output safely; and audit requests, tool calls,
   outcomes, and actor identity.
@@ -125,11 +140,11 @@ project is explicitly not ready to claim 100% completion.
 - [ ] Implement and test authorization boundaries, including fleet/tenant
   isolation, not merely valid-JWT authentication. Add negative tests for
   cross-tenant reads and unauthorized access.
-- [x] Document and implement the scoped security controls required by the
+- [ ] Document and implement the scoped security controls required by the
   brief: TLS in transit, mTLS for device/broker ingress where applicable,
   encryption at rest, secret handling, rate limits, input validation, and
   OWASP API risks. Avoid wildcard CORS in the submission deployment.
-- [x] Make audit logging cover sensitive data access as well as AI actions.
+- [ ] Make audit logging cover sensitive data access as well as AI actions.
   Define location masking, retention, and deletion/right-to-erasure behavior;
   test the deletion path on synthetic records.
 - [ ] Resolve and rerun the image/dependency security scan. Do not dismiss
@@ -170,14 +185,14 @@ measured; failure behavior and security scan are evidenced, not asserted.
 
 ## Phase 6 — Architecture, deployment, and repository readiness
 
-- [x] Update the README with the actual architecture, prerequisites, exact
+- [ ] Update the README with the actual architecture, prerequisites, exact
   Compose instructions, environment variables, URLs, health checks, demo
   credentials policy, tests, limitations, benchmark hardware/results, and
   troubleshooting steps. Fix incorrect health URLs and stale scale claims.
-- [x] Keep the OpenAPI file in sync with the running API, including auth,
+- [ ] Keep the OpenAPI file in sync with the running API, including auth,
   status/error responses, pagination, rate limits, and examples. Document
   event topic, key, schema, and evolution contract.
-- [x] Finish accurate architecture artifacts: C4 context/container view,
+- [ ] Finish accurate architecture artifacts: C4 context/container view,
   event-to-insight latency/data-flow, ER diagram and 3NF notes, deployment
   topology, two key sequence diagrams (including failure), and core-service
   layer boundaries.
@@ -185,7 +200,7 @@ measured; failure behavior and security scan are evidenced, not asserted.
   and after each optimization. Save raw plans and honestly compare the same
   dataset/environment. Remove claims that keyset pagination or an index is
   implemented unless code and plans prove it.
-- [x] Complete 3–5 ADRs with context, alternatives, decision, and consequences;
+- [ ] Complete 3–5 ADRs with context, alternatives, decision, and consequences;
   include storage/CAP/PACELC, messaging/replay, idempotency, scoring, and the
   vector-store decision as applicable.
 - [ ] Validate the Kubernetes/Helm deployment and Terraform for the selected
@@ -193,13 +208,13 @@ measured; failure behavior and security scan are evidenced, not asserted.
   deployed, how secrets and networking are configured, and what remains a
   local-only path. Include frontend and dependencies, not just an API
   deployment manifest.
-- [x] Verify horizontal scaling and availability claims; either demonstrate
+- [ ] Verify horizontal scaling and availability claims; either demonstrate
   replicas/failover or describe the prototype's single points of failure
   without claiming the 99.9% target.
-- [x] Add an SBOM or dependency/license inventory and make sure all Dockerfiles,
+- [ ] Add an SBOM or dependency/license inventory and make sure all Dockerfiles,
   test data, docs, and service folders required to reproduce the submission
   are present.
-- [x] Keep local `.env`, generated noise, caches, and unrelated artifacts out
+- [ ] Keep local `.env`, generated noise, caches, and unrelated artifacts out
   of the submitted repository; verify `.env.example` is complete but contains
   placeholders only.
 

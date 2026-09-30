@@ -49,7 +49,7 @@ export default function AIAssistant() {
     } catch (err) {
       setMessages(prev => [...prev, { 
         role: 'system', 
-        content: err.response?.data?.detail || 'Error connecting to the AI layer. Please make sure OPENAI_API_KEY is configured in the backend.' 
+        content: err.response?.data?.detail || 'Error connecting to the AI layer. Please make sure GROQ_API_KEY is configured in the backend.' 
       }]);
     } finally {
       setIsLoading(false);

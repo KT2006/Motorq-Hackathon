@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Fleet Fuel, Idling & Utilisation Cost — API",
-    "version": "2.0.0",
+    "title": "Motorq Hackathon API - M7",
+    "version": "1.0.0",
     "description": "REST API for the Fleet Intelligence Platform. All endpoints (except /token and /health) require JWT Bearer authentication. Rate limited at 100 req/min (20 req/min for /chat)."
   },
   "paths": {
@@ -127,14 +127,13 @@
             }
           },
           {
-            "name": "offset",
+            "name": "cursor",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+              "type": "string"
+            },
+            "description": "Keyset pagination cursor (vin)"
           }
         ],
         "responses": {
@@ -145,7 +144,7 @@
             "description": "Unauthorized"
           },
           "429": {
-            "description": "Rate limit exceeded",
+            "description": "Rate limit exceeded (100/min)",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -210,7 +209,7 @@
             "description": "Vehicle not found or no data in range"
           },
           "429": {
-            "description": "Rate limit exceeded",
+            "description": "Rate limit exceeded (100/min)",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -284,7 +283,7 @@
             "description": "No live data available for this VIN"
           },
           "429": {
-            "description": "Rate limit exceeded",
+            "description": "Rate limit exceeded (100/min)",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -339,7 +338,7 @@
             "description": "Unauthorized"
           },
           "429": {
-            "description": "Rate limit exceeded",
+            "description": "Rate limit exceeded (100/min)",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -400,7 +399,7 @@
             "description": "Unauthorized"
           },
           "429": {
-            "description": "Rate limit exceeded",
+            "description": "Rate limit exceeded (100/min)",
             "headers": {
               "Retry-After": {
                 "schema": {

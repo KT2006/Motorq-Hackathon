@@ -9,7 +9,7 @@ export default function Overview() {
 
   useEffect(() => {
     getFleetSummary().then(res => {
-      setData(res.summary);
+      setData(res);
       setLoading(false);
     }).catch(err => {
       console.error(err);

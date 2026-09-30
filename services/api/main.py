@@ -128,7 +128,8 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/token")
-def login(creds: LoginRequest):
+@limiter.limit("10/minute")
+def login(request: Request, creds: LoginRequest):
     """Generates a test token valid for 1 hour."""
     # Use environment variables for demo credentials to avoid hardcoding secrets
     demo_user = os.getenv("DEMO_USERNAME", "admin")
@@ -141,10 +142,18 @@ def login(creds: LoginRequest):
         fleet_id = "*"
         role = "admin"
     elif creds.username.startswith("manager"):
-        # For demo purposes, pick the first fleet to show isolation works
+        # For demo purposes, assign different fleets based on manager index (manager_1 -> fleet 1, manager_2 -> fleet 2)
         try:
+            idx = 0
+            if "_" in creds.username:
+                try:
+                    idx = int(creds.username.split("_")[1]) - 1
+                except ValueError:
+                    pass
+            idx = max(0, idx)
+            
             with get_db() as cur:
-                cur.execute("SELECT fleet_id FROM fleets LIMIT 1")
+                cur.execute("SELECT fleet_id FROM fleets ORDER BY fleet_id OFFSET %s LIMIT 1", (idx,))
                 row = cur.fetchone()
                 fleet_id = str(row["fleet_id"]) if row else "unknown-fleet"
         except Exception:
@@ -199,7 +208,7 @@ def list_vehicles(
         cur.execute(query, params)
         rows = cur.fetchall()
         
-    return {"data": rows, "limit": limit, "offset": offset, "count": len(rows)}
+    return {"data": rows, "limit": limit, "cursor": cursor, "count": len(rows)}
 
 @app.get("/vehicles/{vehicle_id}/cost-summary")
 @limiter.limit("100/minute")
@@ -224,10 +233,18 @@ def vehicle_cost_summary(
         FROM cost_summary_daily cs
         JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
         WHERE cs.vehicle_id = %s AND cs.summary_date BETWEEN %s AND %s
-        ORDER BY cs.summary_date ASC
     """
+    params = [vehicle_id_str, from_date, to_date]
+    
+    fleet_id_filter = get_fleet_filter(user)
+    if fleet_id_filter:
+        query += " AND v.fleet_id = %s"
+        params.append(fleet_id_filter)
+        
+    query += " ORDER BY cs.summary_date ASC"
+
     with get_db() as cur:
-        cur.execute(query, (vehicle_id_str, from_date, to_date))
+        cur.execute(query, tuple(params))
         rows = cur.fetchall()
         
     if not rows:
@@ -247,6 +264,8 @@ def fleet_summary(
     user: dict = Depends(verify_token)
 ):
     """Headline cost numbers using the materialized view monthly_fleet_cost."""
+    fleet_id_filter = get_fleet_filter(user)
+    
     query = """
         SELECT SUM(total_fuel_cost) as total_fuel_cost,
                SUM(total_idle_cost) as total_idle_cost,
@@ -258,7 +277,10 @@ def fleet_summary(
     """
     params = [month]
     
-    if fleet_id:
+    if fleet_id_filter:
+        query += " AND fleet_id = %s"
+        params.append(fleet_id_filter)
+    elif fleet_id:
         query += " AND fleet_id = %s"
         params.append(fleet_id)
         
@@ -266,7 +288,14 @@ def fleet_summary(
         cur.execute(query, params)
         row = cur.fetchone()
         
-    return {"month": month, "summary": row}
+    return {
+        "month": month.isoformat(),
+        "total_fuel_cost": float(row["total_fuel_cost"] or 0),
+        "total_idle_cost": float(row["total_idle_cost"] or 0),
+        "avg_utilisation_pct": float(row["avg_utilisation_pct"] or 0),
+        "total_idle_min": float(row["total_idle_min"] or 0),
+        "total_vehicles": int(row["total_vehicles"] or 0),
+    }
 
 @app.get("/fleet/offenders")
 @limiter.limit("100/minute")
@@ -363,6 +392,14 @@ def health_check():
 def get_live_status(request: Request, vin: str, user: dict = Depends(verify_token)):
     """Fetch live, ephemeral vehicle status from Redis."""
     audit_log(user, "read", "live_status", vin, ip=request.client.host)
+    
+    fleet_id_filter = get_fleet_filter(user)
+    if fleet_id_filter:
+        with get_db() as cur:
+            cur.execute("SELECT 1 FROM vehicles WHERE vin = %s AND fleet_id = %s", (vin, fleet_id_filter))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Vehicle not found in your fleet")
+
     try:
         status = redis_client.hgetall(f"vehicle:{vin}:status")
         if not status:
@@ -391,7 +428,7 @@ class ChatRequest(BaseModel):
     from_date: str = Field(default_factory=lambda: (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d"))
     to_date: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
 
-def run_agent_loop(query: str, from_date: str, to_date: str):
+def run_agent_loop(query: str, from_date: str, to_date: str, user: dict):
     # Using Groq's free API which is OpenAI-compatible
     api_key = os.getenv("GROQ_API_KEY", os.getenv("OPENAI_API_KEY", "dummy"))
     client = OpenAI(
@@ -476,17 +513,24 @@ def run_agent_loop(query: str, from_date: str, to_date: str):
             
             try:
                 if func_name == "get_fleet_offenders":
-                    # Re-use our existing logic
-                    # To avoid passing request object, we just call the inner logic or copy the query
-                    limit = min(max(1, int(args.get("limit", 10))), 50)  # Clamp 1-50
+                    limit = min(max(1, int(args.get("limit", 10))), 50)
+                    fleet_id_filter = get_fleet_filter(user)
+                    fleet_clause = ""
+                    params = [from_date, to_date]
+                    if fleet_id_filter:
+                        fleet_clause = "AND v.fleet_id = %s"
+                        params.append(fleet_id_filter)
+                    params.append(limit)
+
                     with get_db() as cur:
-                        cur.execute("""
+                        cur.execute(f"""
                             WITH daily_scores AS (
                                 SELECT cs.vehicle_id, v.vin, v.fuel_type, cs.total_drive_min, cs.total_idle_min,
                                        cs.idle_cost, cs.fuel_cost, cs.utilisation_pct,
                                        CASE WHEN (cs.total_drive_min + cs.total_idle_min) > 0 THEN cs.total_idle_min / (cs.total_drive_min + cs.total_idle_min) * 100.0 ELSE 0.0 END AS idle_pct_of_active
                                 FROM cost_summary_daily cs JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
                                 WHERE cs.summary_date BETWEEN %s AND %s
+                                {fleet_clause}
                             ),
                             vehicle_agg AS (
                                 SELECT vehicle_id, vin, fuel_type, ROUND(AVG(total_drive_min)::numeric, 1) AS avg_drive_min, ROUND(AVG(total_idle_min)::numeric, 1) AS avg_idle_min,
@@ -499,17 +543,27 @@ def run_agent_loop(query: str, from_date: str, to_date: str):
                                 FROM vehicle_agg
                             )
                             SELECT * FROM scored ORDER BY weighted_score DESC LIMIT %s
-                        """, (from_date, to_date, limit))
+                        """, tuple(params))
                         result = cur.fetchall()
                     messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": func_name, "content": json.dumps(result, default=str)})
                     
                 elif func_name == "get_vehicle_cost_summary":
                     vehicle_id = args.get("vehicle_id")
+                    fleet_id_filter = get_fleet_filter(user)
+                    query = """
+                        SELECT cs.summary_date, cs.total_distance_km, cs.total_drive_min, cs.total_idle_min, cs.fuel_cost, cs.idle_cost, cs.utilisation_pct
+                        FROM cost_summary_daily cs
+                        JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
+                        WHERE cs.vehicle_id = %s AND cs.summary_date BETWEEN %s AND %s
+                    """
+                    params = [vehicle_id, from_date, to_date]
+                    if fleet_id_filter:
+                        query += " AND v.fleet_id = %s"
+                        params.append(fleet_id_filter)
+                    query += " ORDER BY cs.summary_date ASC"
+
                     with get_db() as cur:
-                        cur.execute("""
-                            SELECT summary_date, total_distance_km, total_drive_min, total_idle_min, fuel_cost, idle_cost, utilisation_pct
-                            FROM cost_summary_daily WHERE vehicle_id = %s AND summary_date BETWEEN %s AND %s ORDER BY summary_date ASC
-                        """, (vehicle_id, from_date, to_date))
+                        cur.execute(query, tuple(params))
                         result = cur.fetchall()
                     messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": func_name, "content": json.dumps(result, default=str)})
                 else:
@@ -532,7 +586,7 @@ def chat_with_agent(
         raise HTTPException(status_code=500, detail="GROQ_API_KEY or OPENAI_API_KEY not configured on server")
         
     try:
-        final_answer, tool_calls = run_agent_loop(payload.query, payload.from_date, payload.to_date)
+        final_answer, tool_calls = run_agent_loop(payload.query, payload.from_date, payload.to_date, user)
         
         # Write to audit log
         with get_db() as cur:

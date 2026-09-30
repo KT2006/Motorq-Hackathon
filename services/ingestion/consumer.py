@@ -81,11 +81,13 @@ def send_to_dlq(record, error_detail: str) -> None:
             "original_topic": record.topic,
             "original_partition": record.partition,
             "original_offset": record.offset,
-            "original_value": record.value,
+            "original_value": record.value.decode("utf-8", errors="replace") if isinstance(record.value, bytes) else record.value,
             "error": error_detail,
             "timestamp": datetime.utcnow().isoformat(),
         }
-        get_dlq_producer().send(DLQ_TOPIC, dlq_event)
+        producer = get_dlq_producer()
+        producer.send(DLQ_TOPIC, dlq_event)
+        producer.flush()
         logger.info("dlq_sent topic=%s offset=%s", DLQ_TOPIC, record.offset)
     except Exception as dlq_err:
         logger.error("dlq_send_failed offset=%s err=%s", record.offset, dlq_err)
@@ -101,7 +103,6 @@ def create_consumer() -> KafkaConsumer:
     return KafkaConsumer(
         TELEMETRY_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_deserializer=lambda payload: json.loads(payload.decode("utf-8")),
         auto_offset_reset="earliest",
         enable_auto_commit=False,
         group_id=CONSUMER_GROUP,
@@ -123,8 +124,23 @@ def persist_batch(connection, events: list[TelemetryEvent]) -> None:
 
 def update_live_status(cache: redis.Redis, events: list[TelemetryEvent]) -> None:
     pipeline = cache.pipeline(transaction=False)
+    
+    # Track the latest event per VIN in this batch to avoid stale overwrites
+    latest_events = {}
     for event in events:
-        key = f"vehicle:{event.vin}:status"
+        if event.vin not in latest_events or event.ts > latest_events[event.vin].ts:
+            latest_events[event.vin] = event
+
+    for vin, event in latest_events.items():
+        key = f"vehicle:{vin}:status"
+        current_ts_str = cache.hget(key, "last_seen")
+        if current_ts_str:
+            try:
+                current_ts = datetime.fromisoformat(current_ts_str.decode('utf-8') if isinstance(current_ts_str, bytes) else current_ts_str)
+                if event.ts <= current_ts:
+                    continue
+            except (ValueError, AttributeError):
+                pass
         pipeline.hset(key, mapping={
             "lat": event.lat,
             "lon": event.lon,
@@ -164,7 +180,12 @@ def run() -> None:
             valid_events: list[TelemetryEvent] = []
             for record in records:
                 try:
-                    valid_events.append(TelemetryEvent.model_validate(record.value))
+                    payload = json.loads(record.value.decode("utf-8"))
+                    valid_events.append(TelemetryEvent.model_validate(payload))
+                except json.JSONDecodeError as error:
+                    logger.warning("invalid_json topic=%s partition=%s offset=%s error=%s",
+                                   record.topic, record.partition, record.offset, str(error))
+                    send_to_dlq(record, f"JSONDecodeError: {error}")
                 except ValidationError as error:
                     logger.warning("invalid_event topic=%s partition=%s offset=%s errors=%s",
                                    record.topic, record.partition, record.offset, error.errors())

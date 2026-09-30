@@ -145,26 +145,26 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY monthly_fleet_cost;
 
 ---
 
-## 6. Keyset Pagination (for Top-K API)
+## 6. Keyset Pagination (for /vehicles API)
 
 Standard `OFFSET`-based pagination degrades at depth:
 
 ```sql
 -- ❌ Slow at page 100: Postgres scans and discards 990 rows
-SELECT * FROM cost_summary_daily ORDER BY idle_cost DESC OFFSET 990 LIMIT 10;
+SELECT * FROM vehicles ORDER BY vin OFFSET 990 LIMIT 10;
 ```
 
-Keyset pagination uses the last-seen sort key:
+Keyset pagination uses the last-seen sort key (`cursor`):
 
 ```sql
 -- ✅ Constant time regardless of page depth
-SELECT * FROM cost_summary_daily
-WHERE idle_cost < :last_seen_idle_cost
-ORDER BY idle_cost DESC
+SELECT * FROM vehicles
+WHERE vin > :cursor
+ORDER BY vin ASC
 LIMIT 10;
 ```
 
-This works because the `ORDER BY … LIMIT` can start directly at the right position in the index, instead of scanning past all earlier rows. Implemented in the API layer (M7).
+This works because the `ORDER BY … LIMIT` can start directly at the right position in the index, instead of scanning past all earlier rows. Implemented on the `/vehicles` endpoint in the API layer. Note that the Top-K offenders endpoint (`/fleet/offenders`) uses standard `LIMIT` without a cursor, since it returns a small fixed-size result set (max 100 rows).
 
 ---
 

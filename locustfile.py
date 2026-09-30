@@ -8,6 +8,9 @@ Usage:
 import os
 from datetime import date, timedelta
 from locust import HttpUser, task, between
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class FleetAPIUser(HttpUser):

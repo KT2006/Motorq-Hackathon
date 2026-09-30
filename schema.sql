@@ -1,7 +1,7 @@
 -- ============================================================
 -- FUEL, IDLING & UTILISATION COST
 -- Supabase PostgreSQL 17
--- No TimescaleDB dependency
+-- TimescaleDB-enabled for time-series telemetry
 -- ============================================================
 
 
@@ -10,6 +10,7 @@
 -- ============================================================
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 
 
 -- ============================================================
@@ -151,7 +152,7 @@ CREATE TABLE IF NOT EXISTS idle_burn_rate_reference (
 
 CREATE TABLE IF NOT EXISTS telemetry_events (
 
-    event_id            BIGSERIAL PRIMARY KEY,
+    event_id            BIGSERIAL,
 
     vin                 CHAR(17) NOT NULL,
 
@@ -220,6 +221,13 @@ WHERE evt IS NOT NULL;
 -- Prevent duplicate telemetry packets
 CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_unique_packet
 ON telemetry_events (vin, ts, seq);
+
+-- Convert to TimescaleDB hypertable for time-series partitioning
+SELECT create_hypertable('telemetry_events', 'ts', 
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE,
+    migrate_data => TRUE
+);
 
 
 -- ============================================================

@@ -12,11 +12,11 @@
 | R8 | React dashboard with overview, leaderboard, drill-down | `dashboard/src/components/` — 4 views | Visual inspection + smoke test | ✅ Done |
 | R9 | AI agent with tool-calling | `services/api/main.py` — `/chat` + Groq LLM | Agent audit log in `agent_logs` table | ✅ Done |
 | R10 | JWT authentication | `main.py` — `verify_token()` + `/token` | Auth required on all data endpoints | ✅ Done |
-| R11 | Rate limiting | `slowapi` on all endpoints (100/min, 20/min for chat) | Rate limit headers in API responses | ✅ Done |
+| R11 | Rate limiting | `slowapi` on all endpoints (10000/min, 20/min for chat) | Rate limit headers in API responses | ✅ Done |
 | R12 | Docker Compose one-command startup | `docker-compose.yml` — 6 services | `docker compose up --build` | ✅ Done |
-| R13 | 100K+ vehicle synthetic data | `simulator/data_simulator.py` — multiprocessing-ready | Documented scaling path | ⚠️ Partial |
-| R14 | 100K events/sec throughput target | Architecture supports it, benchmark needed | `locustfile.py` for load testing | ⚠️ Partial |
-| R15 | 80%+ test coverage | `pytest --cov` on segmentation modules | `docs/coverage-report.txt` | ⚠️ Partial |
+| R13 | 100K+ vehicle synthetic data | `simulator/data_simulator.py` — multiprocessing-ready | Documented scaling path | ⚠️ Architecture supports, demo seeds 50 |
+| R14 | 100K events/sec throughput target | Architecture supports it, benchmark needed | `locustfile.py` for load testing | ⚠️ Not benchmarked at target scale |
+| R15 | 80%+ test coverage | `pytest --cov` on segmentation modules | `docs/coverage-report.txt` | ⚠️ Current: ~42% |
 | R16 | Security scan | Trivy container scan | `docs/trivy_scan_api.txt` | ✅ Done |
 | R17 | ADRs (3-5) | `docs/adrs.md` | 5 ADRs documented | ✅ Done |
 | R18 | OpenAPI spec | `docs/openapi.json` | Sync with running API | ✅ Done |
