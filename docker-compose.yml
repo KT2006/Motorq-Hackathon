@@ -31,6 +31,7 @@ services:
       DB_PASSWORD: fleet_pass
       DB_HOST: postgres
       DB_PORT: 5432
+      AUTH_TYPE: scram-sha-256
       POOL_MODE: transaction
       MAX_CLIENT_CONN: 1000
       DEFAULT_POOL_SIZE: 50
@@ -99,7 +100,7 @@ services:
       - .env
     environment:
       # Override with container-internal hostnames
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql://fleet_user:fleet_pass@pgbouncer:5432/fleet_db}
+      POSTGRES_URL: postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       REDIS_HOST:             redis
       REDIS_PORT:             "6379"
@@ -126,7 +127,7 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql://fleet_user:fleet_pass@pgbouncer:5432/fleet_db}
+      POSTGRES_URL: postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     volumes:
       - ./simulator:/app/simulator:ro
@@ -150,7 +151,7 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql://fleet_user:fleet_pass@pgbouncer:5432/fleet_db}
+      POSTGRES_URL: postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db
       JWT_SECRET:   ${JWT_SECRET}
       GROQ_API_KEY: ${GROQ_API_KEY}
       REDIS_HOST:   redis

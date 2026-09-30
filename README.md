@@ -106,8 +106,6 @@ See `/docs/load-test-results.md` for results.
 - **Demo scale:** The seeder generates 50 vehicles × 14 days by default. Full 100K-vehicle scale is architecturally supported but untested at scale.
 - **TimescaleDB:** TimescaleDB is a hard dependency required for the hypertable partitioning on telemetry events.
 - **Horizontal Scaling:** Single Postgres instance (SPOF). Single Redis instance. True horizontal scaling (read replicas, Redis cluster) is not implemented.
-- **VITE_* security:** Demo credentials are embedded in the built JS bundle — appropriate for a hackathon demo, but completely insecure for production.
-- **Tenant Isolation:** Tenant isolation is only partially implemented (e.g. `/vehicles`, `/fleet/summary`) but missing on several endpoints (`/chat`, cost summary, live status).
 - **Test Coverage:** Currently at ~42%, not the 80% target.
 - **Container vulnerabilities:** The Trivy scan reports 44 high-severity findings in base OS packages.
 - **TLS:** Local Docker networking is plaintext.
