@@ -141,19 +141,13 @@ def login(request: Request, creds: LoginRequest):
     if creds.username == demo_user:
         fleet_id = "*"
         role = "admin"
-    elif creds.username.startswith("manager"):
-        # For demo purposes, assign different fleets based on manager index (manager_1 -> fleet 1, manager_2 -> fleet 2)
+    elif creds.username in ("manager_1", "manager_2"):
+        # For demo purposes, map these two explicit test users to the first two seeded fleets
         try:
-            idx = 0
-            if "_" in creds.username:
-                try:
-                    idx = int(creds.username.split("_")[1]) - 1
-                except ValueError:
-                    pass
-            idx = max(0, idx)
+            idx = 0 if creds.username == "manager_1" else 1
             
             with get_db() as cur:
-                cur.execute("SELECT fleet_id FROM fleets ORDER BY fleet_id OFFSET %s LIMIT 1", (idx,))
+                cur.execute("SELECT fleet_id FROM fleets ORDER BY fleet_id ASC OFFSET %s LIMIT 1", (idx,))
                 row = cur.fetchone()
                 fleet_id = str(row["fleet_id"]) if row else "unknown-fleet"
         except Exception:

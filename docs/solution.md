@@ -21,7 +21,7 @@ The Fleet Intelligence Platform ingests raw telemetry events at scale, runs a de
 4. **Weighted Offender Scoring:** Combines idle cost, idle percentage, and absolute minutes to rank the genuinely worst offenders.
 
 ## 5. Data Model
-The system uses PostgreSQL for relational data and TimescaleDB for time-series telemetry. The `telemetry_events` table is being updated to use TimescaleDB hypertable partitioning by time (`ts`), which transparently shards data to handle high-volume ingestion and fast time-based queries.
+The system uses PostgreSQL for relational data and TimescaleDB for time-series telemetry. The `telemetry_events` table uses TimescaleDB hypertable partitioning by time (`ts`), which transparently shards data to handle high-volume ingestion and fast time-based queries.
 
 ## 6. Segmentation Algorithm
 *(See `docs/algorithms.md` for full details)*
@@ -31,7 +31,7 @@ Raw telemetry is processed into meaningful `trips` and `idle_events` using a det
 Cost analysis uses a weighted scoring mechanism rather than a naive total. The algorithm combines idle cost, idle percentage, and absolute idle minutes to rank the genuinely worst offenders, ensuring that vehicles with high utilization aren't unfairly penalized for naturally having more absolute idle time.
 
 ## 8. Security
-- **Authentication:** JWT-based stateless auth. *Note on demo auth:* Demo credentials use a browser prompt to securely request the demo password. It is no longer embedded in the built JS bundle.
+- **Authentication:** JWT-based stateless auth. *Note on demo auth:* Demo credentials use a browser prompt to securely request the demo password.
 - **Tenant Isolation:** Users receive tokens mapped to a specific `fleet_id`. The API strictly enforces this across ALL data endpoints (including cost summary, live status, and AI tool calls) by implicitly appending `fleet_id = %s` filter clauses.
 - **Audit Logging:** Every AI request and sensitive API call is logged in the `audit_log` table with the user's identity, timestamp, and query details.
 
