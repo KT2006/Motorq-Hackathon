@@ -36,7 +36,7 @@ def worker(topic, bootstrap, count):
 if __name__ == '__main__':
     processes = []
     for _ in range(8):
-        p = Process(target=worker, args=('telemetry', 'localhost:9092', 62500))
+        p = Process(target=worker, args=('telemetry', 'localhost:9092', 125000))
         p.start()
         processes.append(p)
     
@@ -44,4 +44,4 @@ if __name__ == '__main__':
     for p in processes:
         p.join()
     end = time.time()
-    print(f'Pushed 500,000 events to Kafka in {end - start:.2f} seconds')
+    print(f'Pushed 1,000,000 events to Kafka in {end - start:.2f} seconds')

@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { getVehicleCostSummary, getLiveStatus } from '../api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { ArrowLeft, Radio } from 'lucide-react';
+import { formatINR } from '../formatters';
 
 /** Poll an API function every `intervalMs` ms. Returns { data, error, loading }. */
 function usePolling(fetcher, intervalMs = 5000) {
@@ -140,8 +141,8 @@ export default function VehicleDetail() {
 
   const chartData = data.map(d => ({
     name: new Date(d.summary_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    'Fuel Cost (Rs)': d.fuel_cost,
-    'Idle Cost (Rs)': d.idle_cost
+    'Fuel Cost (₹)': d.fuel_cost,
+    'Idle Cost (₹)': d.idle_cost
   }));
 
   return (
@@ -166,11 +167,11 @@ export default function VehicleDetail() {
       <div className="kpi-grid">
         <div className="glass-panel">
           <div className="kpi-label">30-Day Idle Cost</div>
-          <div className="kpi-value text-danger">Rs{totalIdleCost.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div className="kpi-value text-danger">{formatINR(totalIdleCost)}</div>
         </div>
         <div className="glass-panel">
           <div className="kpi-label">30-Day Fuel Cost</div>
-          <div className="kpi-value">Rs{totalFuelCost.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div className="kpi-value">{formatINR(totalFuelCost)}</div>
         </div>
         <div className="glass-panel">
           <div className="kpi-label">Avg Daily Utilisation</div>
@@ -185,13 +186,14 @@ export default function VehicleDetail() {
             <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
               <XAxis dataKey="name" stroke="rgba(255,255,255,0.5)" />
-              <YAxis stroke="rgba(255,255,255,0.5)" />
+              <YAxis stroke="rgba(255,255,255,0.5)" tickFormatter={(value) => formatINR(value)} />
               <Tooltip
                 contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#fff' }}
+                formatter={(value) => formatINR(value, 2)}
               />
               <Legend />
-              <Bar dataKey="Fuel Cost (Rs)" stackId="a" fill="#3b82f6" />
-              <Bar dataKey="Idle Cost (Rs)" stackId="a" fill="#ef4444" />
+              <Bar dataKey="Fuel Cost (₹)" stackId="a" fill="#3b82f6" />
+              <Bar dataKey="Idle Cost (₹)" stackId="a" fill="#ef4444" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -218,7 +220,7 @@ export default function VehicleDetail() {
                   <td>{day.total_distance_km.toFixed(1)}</td>
                   <td>{day.total_drive_min.toFixed(1)}</td>
                   <td className={day.total_idle_min > 60 ? 'text-danger' : ''}>{day.total_idle_min.toFixed(1)}</td>
-                  <td className="text-danger">Rs{day.idle_cost.toFixed(2)}</td>
+                  <td className="text-danger">{formatINR(day.idle_cost, 2)}</td>
                   <td>{day.utilisation_pct.toFixed(1)}%</td>
                 </tr>
               ))}

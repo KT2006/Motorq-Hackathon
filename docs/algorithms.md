@@ -208,26 +208,31 @@ For each `(vehicle_id, summary_date)`, we compute:
 | `total_distance_km` | `SUM(trips.distance_km)` for that day | trips (M4) |
 | `total_drive_min` | `SUM(trips.duration_min)` | trips (M4) |
 | `total_idle_min` | `SUM(idle_events.duration_min)` | idle_events (M4) |
-| `available_min` | `1440` (24h) | configurable shift window |
-| `fuel_cost` | `total_fuel_used_l × price_per_unit` | fuel_price_reference |
-| `idle_cost` | `total_idle_fuel_burned_l × price_per_unit` | idle_burn_rate_reference + fuel_price_reference |
+| `available_min` | `600` minutes (10-hour scheduled shift) | cost engine |
+| `fuel_cost` | fuel/energy used × INR price per litre/kWh | fuel_price_reference (`currency = 'INR'`) |
+| `idle_cost` | idle fuel/energy burned × INR price per litre/kWh | segmentation burn-rate assumption + fuel_price_reference |
 | `utilisation_pct` | `total_drive_min / available_min × 100` | derived |
 
 The rollup uses a single SQL query with CTEs (`trip_daily`, `idle_daily`, `combined`) joined against `vehicles`, `fleets`, and `fuel_price_reference` (via `LATERAL` subquery for closest effective date). Result is upserted via `ON CONFLICT (vehicle_id, summary_date) DO UPDATE`.
 
 ### Complexity
 - **Time**: O(T + I) where T = trip rows, I = idle rows — single pass via SQL aggregation
-- **I/O**: Single query + single batch upsert — 2,280 rows for 85 vehicles × ~27 days
+- **I/O**: Single query + single batch upsert — up to 700 daily rows for the default 50 vehicles × 14 days
 
-### 9.1 Fuel Prices and Idle Burn Rates Assumptions
-- **Fuel prices used in the system** (from `schema.sql` seed data):
-  - Petrol: ₹103.44/L (Indian Oil Chennai, Sep 2026)
-  - Diesel: ₹92.72/L (Indian Oil Chennai, Sep 2026)
-  - EV electricity: ₹8.00/kWh (BESCOM residential tariff)
-- **Idle burn rates** (from `config.py`):
-  - Petrol: 0.6 L/h, Diesel: 0.5 L/h, Hybrid: 0.3 L/h, EV: 0.9 kWh/h
-- **Source citations:** Indian Oil retail price list, BESCOM tariff schedule.
-- *Label: All prices are synthetic estimates for demonstration purposes.*
+### 9.1 INR Price and Idle Burn Assumptions
+
+The demo is INR-only. `fuel_price_reference.currency` is constrained to `INR`,
+and the rollup selects only INR price rows. Seed prices are illustrative values,
+not live retail tariffs: petrol ₹103/L, diesel ₹92/L, hybrid ₹103/L (petrol
+equivalent), and electricity ₹8/kWh. If no matching price row exists, the
+rollup uses ₹103/L for liquid fuel and ₹8/kWh for electricity.
+
+Idle consumption is estimated by the segmentation engine at 0.6 L/h for petrol,
+0.5 L/h for diesel, 0.3 L/h for hybrid, and 0.9 kWh/h for EV. For example,
+58 minutes idling in a petrol vehicle costs approximately
+`58 / 60 × 0.6 × ₹103 = ₹59.74`. These are transparent demo assumptions;
+real deployments should load region- and date-specific prices and vehicle
+calibrated burn rates.
 
 ---
 
@@ -270,28 +275,24 @@ PostgreSQL's `ORDER BY score DESC LIMIT K` implements top-K efficiently:
 - It maintains a bounded heap of size K during the scan
 - **Complexity**: O(n log K) where n = number of vehicles — heap insertion is O(log K) per vehicle
 
-### 10.5 Baseline vs Weighted — Real Disagreements
+### 10.5 Baseline vs Weighted — Worked Example
 
-From our seed data (85 vehicles, 27 days), using a 500 min/day naive threshold:
+This is a unit-test example, not a measured fleet result. Compare one operating
+day for a petrol vehicle (A) and a hybrid vehicle (B), using the synthetic INR
+prices and burn rates above. For the score example, the illustrative fleet
+normalizers are ₹100 maximum idle cost and 100 maximum idle minutes.
 
-| Vehicle | Fuel | Avg Idle | Idle % | Idle Cost | Naive | Weighted |
-|---------|------|----------|--------|-----------|-------|----------|
-| `CJ75H2TD679HJHGHE` | diesel | 487.0 min | **83.2%** | ₹1,217 | ❌ MISSED | ✅ Caught |
-| `NW32EDJMZ55WDBBXU` | petrol | 479.3 min | **82.5%** | ₹1,438 | ❌ MISSED | ✅ Caught |
-| `PS289YNHS5478VUV6` | petrol | 511.4 min | 80.5% | ₹15,342 | ✅ Flagged | ✅ Caught |
+| Vehicle | Drive Min | Idle Min | Idle Cost (INR/day) | Naive Flag (>60 min) | Weighted Score |
+|---------|-----------|----------|---------------------|---------------------|-----------------|
+| A (petrol) | 150 | 58 | ₹59.74 | No | 1.46 |
+| B (hybrid) | 800 | 65 | ₹33.48 | Yes | 1.06 |
 
-**Key insight**: Vehicle `CJ75H2TD679HJHGHE` was MISSED by the naive threshold (487 min < 500 min cutoff) but is **83.2% idle** — the vast majority of its active time is wasted idling. The weighted score catches this because `idle_pct` is a first-class scoring component.
-
-### Weighted vs Naive Ranking — Concrete Example
-
-| Vehicle | Idle Min | Total Active Min | Idle Cost (₹) | Naive Flag (>60 min) | Weighted Score |
-|---------|----------|------------------|---------------|---------------------|---------------|
-| A       | 58       | 150              | 800           | ✗ (below threshold) | 1.47          |
-| B       | 65       | 800              | 300           | ✓ (above threshold) | 0.63          |
-
-**Analysis:** Vehicle A has 38.7% idle time and ₹800 waste but is missed by the naive threshold.
-Vehicle B has only 8.1% idle time and ₹300 waste but is flagged by the naive approach.
-The weighted score correctly identifies Vehicle A as the worse offender.
+Vehicle A is missed by the simple threshold despite idling for 27.9% of its
+active time, versus 7.5% for B. Its weighted score is higher because it has
+greater relative idling and slightly higher absolute idle cost. The values are
+consistent with the sample burn rates: A is approximately
+`58 / 60 × 0.6 L/h × ₹103/L`; B is approximately
+`65 / 60 × 0.3 L/h × ₹103/L`.
 
 **Test evidence:** `tests/test_cost_calc.py::test_baseline_vs_weighted_score_disagree_on_edge_case`
 
@@ -303,16 +304,11 @@ Rules-based scoring was chosen over a trained classifier because labeled ground 
 
 ---
 
-## 12. Fleet-Wide Results (Seed Data)
+## 12. Fleet-Wide Results
 
-| Metric | Value |
-|--------|-------|
-| Total fuel cost | ₹5,32,869 |
-| Total idle cost | ₹6,65,427 |
-| **Idle waste as % of total cost** | **55.5%** |
-| Avg daily utilisation | 9.2% |
-
-> The fleet loses more money to idling than to driving. This is the actionable insight the product delivers.
+Fleet totals are intentionally omitted here because they depend on the selected
+seed period and reference prices. Capture them from a fresh seed run with the
+run date and assumptions; do not reuse historical totals after changing either.
 
 ---
 

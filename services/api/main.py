@@ -247,7 +247,7 @@ def vehicle_cost_summary(
     vin = rows[0].pop("vin")
     for row in rows[1:]:
         row.pop("vin", None)
-    return {"vehicle_id": vehicle_id_str, "vin": vin, "data": rows}
+    return {"vehicle_id": vehicle_id_str, "vin": vin, "currency": "INR", "data": rows}
 
 @app.get("/fleet/summary")
 @limiter.limit("100/minute")
@@ -284,6 +284,7 @@ def fleet_summary(
         
     return {
         "month": month.isoformat(),
+        "currency": "INR",
         "total_fuel_cost": float(row["total_fuel_cost"] or 0),
         "total_idle_cost": float(row["total_idle_cost"] or 0),
         "avg_utilisation_pct": float(row["avg_utilisation_pct"] or 0),
@@ -354,7 +355,7 @@ def top_offenders(
         cur.execute(query, tuple(params))
         rows = cur.fetchall()
         
-    return {"data": rows, "limit": limit}
+    return {"data": rows, "limit": limit, "currency": "INR"}
 
 import redis
 
@@ -466,7 +467,7 @@ def run_agent_loop(query: str, from_date: str, to_date: str, user: dict):
     ]
     
     messages = [
-        {"role": "system", "content": f"You are an AI fleet manager assistant. Answer questions using the provided tools. Today is {to_date}. Always refer to specific numbers and costs in your response."}
+        {"role": "system", "content": f"You are an AI fleet manager assistant. Answer questions using the provided tools. Today is {to_date}. Cost values are in Indian rupees (INR); show money amounts with the ₹ symbol and never convert currencies. Always refer to specific numbers and costs in your response."}
     ]
     messages.append({"role": "user", "content": query})
     

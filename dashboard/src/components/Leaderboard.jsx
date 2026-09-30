@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getTopOffenders } from '../api';
 import { AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { formatINR } from '../formatters';
 
 export default function Leaderboard() {
   const [data, setData] = useState([]);
@@ -83,7 +84,7 @@ export default function Leaderboard() {
                   <td style={{ textTransform: 'capitalize' }}>{row.fuel_type}</td>
                   <td>{row.avg_idle_min.toFixed(1)}</td>
                   <td>{row.avg_idle_pct.toFixed(1)}%</td>
-                  <td className="text-danger font-bold">₹{row.total_idle_cost.toLocaleString()}</td>
+                  <td className="text-danger font-bold">{formatINR(row.total_idle_cost)}</td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       {row.weighted_score.toFixed(2)}

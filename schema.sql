@@ -109,6 +109,7 @@ ON drivers(assigned_vehicle_id);
 
 -- ============================================================
 -- 3. REFERENCE / ASSUMPTION DATA
+-- Cost calculations in this application are INR-only.
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS fuel_price_reference (
@@ -118,7 +119,8 @@ CREATE TABLE IF NOT EXISTS fuel_price_reference (
     price_per_unit  NUMERIC(8,4) NOT NULL
         CHECK (price_per_unit >= 0),
 
-    currency        TEXT NOT NULL DEFAULT 'INR',
+    currency        TEXT NOT NULL DEFAULT 'INR'
+        CHECK (currency = 'INR'),
 
     region          TEXT NOT NULL,
 
@@ -468,10 +470,10 @@ ON monthly_fleet_cost (month DESC);
 INSERT INTO fuel_price_reference
     (fuel_type, price_per_unit, currency, region, effective_date)
 VALUES
-    ('petrol', 100.00, 'INR', 'India', CURRENT_DATE),
+    ('petrol', 103.00, 'INR', 'India', CURRENT_DATE),
     ('diesel', 92.00, 'INR', 'India', CURRENT_DATE),
-    ('hybrid', 100.00, 'INR', 'India', CURRENT_DATE),
-    ('ev', 10.00, 'INR', 'India', CURRENT_DATE)
+    ('hybrid', 103.00, 'INR', 'India', CURRENT_DATE),
+    ('ev', 8.00, 'INR', 'India', CURRENT_DATE)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO idle_burn_rate_reference

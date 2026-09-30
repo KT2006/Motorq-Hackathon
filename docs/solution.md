@@ -1,7 +1,7 @@
 # Fleet Intelligence Platform — Solution Document
 
 ## 1. Problem Statement
-Commercial fleets lose millions of dollars annually to engine idling and poor vehicle utilisation. Raw GPS and telemetry data is too noisy to surface this waste directly. Fleet managers cannot see the financial impact of their operations from raw coordinates.
+Commercial fleets incur avoidable operating costs through engine idling and poor vehicle utilisation. Raw GPS and telemetry data is too noisy to surface this waste directly. Fleet managers need to see the financial impact of their operations from raw coordinates, expressed in Indian rupees (INR).
 
 ## 2. Solution Overview
 The Fleet Intelligence Platform ingests raw telemetry events at scale, runs a deterministic O(n) state machine to segment trips and idling, and calculates daily aggregated costs. A React dashboard and an embedded, tool-calling LLM agent surface these insights to fleet managers.
@@ -28,7 +28,7 @@ The system uses PostgreSQL for relational data and TimescaleDB for time-series t
 Raw telemetry is processed into meaningful `trips` and `idle_events` using a deterministic O(n) state machine. It iterates over sorted events for each vehicle exactly once, maintaining running state to correctly identify periods of motion and idling.
 
 ## 7. Cost Calculation
-Cost analysis uses a weighted scoring mechanism rather than a naive total. The algorithm combines idle cost, idle percentage, and absolute idle minutes to rank the genuinely worst offenders, ensuring that vehicles with high utilization aren't unfairly penalized for naturally having more absolute idle time.
+Cost analysis uses a weighted scoring mechanism rather than a naive total. Fuel and idle costs are calculated using INR-denominated reference prices (₹/litre for liquid fuels and ₹/kWh for electricity); cost values are never currency-converted. The algorithm combines idle cost, idle percentage, and absolute idle minutes to rank the genuinely worst offenders, ensuring that vehicles with high utilization aren't unfairly penalized for naturally having more absolute idle time.
 
 ## 8. Security
 - **Authentication:** JWT-based stateless auth. *Note on demo auth:* Demo credentials use a browser prompt to securely request the demo password.

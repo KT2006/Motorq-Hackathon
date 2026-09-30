@@ -2,7 +2,7 @@
 
 ## Problem
 
-Commercial fleets lose millions of dollars annually to engine idling and poor vehicle utilisation. Raw GPS and telemetry data is too noisy to surface this waste directly — it just says "vehicle X was at this coordinate doing 0 km/h at 14:02:11," a million times over. Fleet managers cannot see the financial impact of their operations from raw coordinates.
+Commercial fleets incur avoidable operating costs through engine idling and poor vehicle utilisation. Raw GPS and telemetry data is too noisy to surface this waste directly — it just says "vehicle X was at this coordinate doing 0 km/h at 14:02:11," a million times over. Fleet managers need to see the financial impact of their operations from raw coordinates, expressed in Indian rupees (INR).
 
 ## Architecture
 
@@ -41,10 +41,24 @@ docker compose up --build
 
 On first run, the `seeder` service automatically:
 1. Creates 50 synthetic vehicles across 3 fleets
-2. Generates 14 days of realistic telemetry (with deliberate duplicates to prove idempotency)
+2. Generates 14 days of synthetic telemetry (with deliberate duplicates to prove idempotency)
 3. Runs the M4 segmentation engine
 4. Runs the M5 cost rollup
 5. Publishes 60 live events to Redpanda for the live-status demo
+
+The demo profile models a 10-hour scheduled shift with 2-4 trips per vehicle per
+day, typically 20-40 km per trip and 25-40 km/h target speeds. Fuel/SOC
+consumption uses synthetic reference assumptions (petrol 12 km/L, diesel
+15 km/L, hybrid 18 km/L, EV 5.5 km/kWh; 50 L tank and 60 kWh battery).
+These are illustrative demo values, not measurements from real vehicles.
+Utilisation is calculated against the 600-minute shift. Existing database
+volumes are not automatically reseeded; use a fresh demo database to see the
+updated profile.
+
+Cost rollups use INR reference prices: petrol/hybrid ₹103 per litre, diesel
+₹92 per litre, and electricity ₹8 per kWh. These are fixed synthetic demo
+assumptions; the API and dashboard treat cost values as INR and do not perform
+currency conversion.
 
 **Dashboard:** http://localhost:80  
 **API Docs:** http://localhost:8000/docs  

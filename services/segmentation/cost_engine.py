@@ -62,8 +62,10 @@ W_IDLE_MIN = 1.0
 # Naive threshold for baseline comparison (minutes/day)
 NAIVE_IDLE_THRESHOLD_MIN = 60.0
 
-# Available minutes per day (24h default; could be a shift window)
-AVAILABLE_MIN_PER_DAY = 24 * 60  # 1440 minutes
+# Scheduled operating minutes per day; parked overnight hours are excluded.
+AVAILABLE_MIN_PER_DAY = 10 * 60  # 600 minutes
+DEFAULT_FUEL_PRICE_INR_PER_LITRE = 103.0
+DEFAULT_ELECTRICITY_PRICE_INR_PER_KWH = 8.0
 
 
 # ============================================================================
@@ -166,17 +168,17 @@ SELECT
     -- Fuel cost: fuel consumed during trips × price per unit
     CASE
         WHEN v.fuel_type = 'ev' THEN
-            c.total_energy_used_kwh * COALESCE(fp.price_per_unit, 10.0)
+            c.total_energy_used_kwh * COALESCE(fp.price_per_unit, %(default_electricity_price_inr_per_kwh)s)
         ELSE
-            c.total_fuel_used_l * COALESCE(fp.price_per_unit, 100.0)
+            c.total_fuel_used_l * COALESCE(fp.price_per_unit, %(default_fuel_price_inr_per_litre)s)
     END AS fuel_cost,
 
     -- Idle cost: fuel/energy burned while idling × price per unit
     CASE
         WHEN v.fuel_type = 'ev' THEN
-            c.total_idle_energy_kwh * COALESCE(fp.price_per_unit, 10.0)
+            c.total_idle_energy_kwh * COALESCE(fp.price_per_unit, %(default_electricity_price_inr_per_kwh)s)
         ELSE
-            c.total_idle_fuel_l * COALESCE(fp.price_per_unit, 100.0)
+            c.total_idle_fuel_l * COALESCE(fp.price_per_unit, %(default_fuel_price_inr_per_litre)s)
     END AS idle_cost,
 
     -- Utilisation percentage
@@ -195,6 +197,7 @@ LEFT JOIN LATERAL (
     FROM fuel_price_reference fpr
     WHERE fpr.fuel_type = v.fuel_type
       AND fpr.region = 'India'
+      AND fpr.currency = 'INR'
       AND fpr.effective_date <= c.summary_date
     ORDER BY fpr.effective_date DESC
     LIMIT 1
@@ -208,7 +211,11 @@ def run_rollup(conn, start_date=None, end_date=None, dry_run=False):
     t0 = time.time()
 
     with conn.cursor() as cur:
-        cur.execute(ROLLUP_SQL, {"available_min": AVAILABLE_MIN_PER_DAY})
+        cur.execute(ROLLUP_SQL, {
+            "available_min": AVAILABLE_MIN_PER_DAY,
+            "default_fuel_price_inr_per_litre": DEFAULT_FUEL_PRICE_INR_PER_LITRE,
+            "default_electricity_price_inr_per_kwh": DEFAULT_ELECTRICITY_PRICE_INR_PER_KWH,
+        })
         rows = cur.fetchall()
         col_names = [desc[0] for desc in cur.description]
 

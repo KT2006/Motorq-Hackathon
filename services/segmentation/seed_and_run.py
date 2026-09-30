@@ -21,6 +21,7 @@ import sys
 import time
 import uuid
 import random
+import math
 import string
 import logging
 from datetime import datetime, timedelta, timezone
@@ -129,63 +130,99 @@ def seed_master_data(conn):
 # ─── telemetry events ─────────────────────────────────────────────────────────
 
 IDLE_BURN = {"petrol": 0.6, "diesel": 0.5, "hybrid": 0.3, "ev": 0.0}
+FUEL_EFFICIENCY_KM_PER_UNIT = {
+    "petrol": 12.0,
+    "diesel": 15.0,
+    "hybrid": 18.0,
+    "ev": 5.5,
+}
+REFERENCE_TANK_LITRES = 50.0
+REFERENCE_BATTERY_KWH = 60.0
 CITY_LAT = (12.90, 13.20)
 CITY_LON = (80.10, 80.30)
 
-def generate_day_events(vin: str, fuel: str, base_date: datetime, seq_offset: int):
-    """Generates one day of telemetry for a single vehicle. Returns list of event dicts."""
+def generate_day_events(
+    vin: str,
+    fuel: str,
+    base_date: datetime,
+    seq_offset: int,
+    odo_start: float | None = None,
+    lat_start: float | None = None,
+    lon_start: float | None = None,
+):
+    """Generate one plausible 10-hour fleet shift of telemetry for one vehicle."""
     events = []
     ts = base_date.replace(hour=6, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-    lat = random.uniform(*CITY_LAT)
-    lon = random.uniform(*CITY_LON)
-    odo = round(random.uniform(1000, 80000), 1)
-    fuel_pct = random.uniform(30, 100) if fuel != "ev" else None
-    soc = random.uniform(30, 100) if fuel == "ev" else None
+    lat = lat_start if lat_start is not None else random.uniform(*CITY_LAT)
+    lon = lon_start if lon_start is not None else random.uniform(*CITY_LON)
+    odo = odo_start if odo_start is not None else random.uniform(5000, 120000)
+    fuel_pct = random.uniform(65, 90) if fuel != "ev" else None
+    soc = random.uniform(65, 90) if fuel == "ev" else None
     seq = seq_offset
 
-    def emit(evt_type=None, speed=0.0, ignition=True):
+    def emit(evt_type=None, speed=0.0, ignition=True, interval_seconds=0):
         nonlocal ts, seq
         events.append({
             "vin": vin, "ts": ts.isoformat(), "seq": seq,
             "lat": round(lat, 6), "lon": round(lon, 6),
-            "speed_kmh": round(speed, 1), "odo_km": round(odo, 1),
+            "speed_kmh": round(speed, 1), "odo_km": round(odo, 3),
             "ignition_status": ignition,
-            "fuel_level_pct": round(fuel_pct, 1) if fuel_pct is not None else None,
-            "soc_pct": round(soc, 1) if soc is not None else None,
+            "fuel_level_pct": round(fuel_pct, 2) if fuel_pct is not None else None,
+            "soc_pct": round(soc, 2) if soc is not None else None,
             "dtc": None, "evt": evt_type,
         })
         seq += 1
-        ts += timedelta(seconds=random.randint(10, 30))
+        ts += timedelta(seconds=interval_seconds)
 
-    # 2-3 trips per day
-    n_trips = random.randint(2, 3)
-    for _ in range(n_trips):
-        # Pre-trip idle (depot)
-        for _ in range(random.randint(2, 5)):
-            emit(speed=0.0)
-        emit("TRIP_START", speed=0.0)
-        # Driving phase
-        for _ in range(random.randint(5, 15)):
-            spd = random.uniform(20, 80)
-            lat += random.uniform(-0.002, 0.002)
-            lon += random.uniform(-0.002, 0.002)
-            odo += spd * 20 / 3600
-            emit(speed=spd)
-        # In-trip idle
-        if random.random() < 0.5:
-            emit("IDLE_START", speed=0.0)
-            for _ in range(random.randint(3, 8)):
-                emit(speed=0.0)
-            emit("IDLE_END", speed=0.0)
-        # Resume driving
-        for _ in range(random.randint(3, 8)):
-            spd = random.uniform(20, 60)
-            lat += random.uniform(-0.001, 0.001)
-            lon += random.uniform(-0.001, 0.001)
-            odo += spd * 20 / 3600
-            emit(speed=spd)
-        emit("TRIP_END", speed=0.0)
-        ts += timedelta(minutes=random.randint(15, 60))
+    # A short ignition-on depot warm-up is recorded as a real pre-trip idle.
+    for _ in range(random.randint(3, 6)):
+        emit(speed=0.0, interval_seconds=120)
+
+    # Commercial vehicles typically make several substantial routes per shift,
+    # not a few minutes of driving. Distances, speeds and timestamps share one
+    # calculation so the odometer agrees with the reported movement.
+    n_trips = random.randint(2, 4)
+    for trip_index in range(n_trips):
+        emit("TRIP_START", speed=0.0, interval_seconds=30)
+
+        distance_km = random.uniform(20.0, 40.0)
+        target_speed_kmh = random.uniform(25.0, 40.0)
+        drive_seconds = distance_km / target_speed_kmh * 3600
+        n_samples = max(8, round(drive_seconds / 180))
+        sample_seconds = drive_seconds / n_samples
+        raw_speeds = [random.uniform(0.75, 1.25) * target_speed_kmh for _ in range(n_samples)]
+        scale = distance_km / sum(speed * sample_seconds / 3600 for speed in raw_speeds)
+        speeds = [speed * scale for speed in raw_speeds]
+
+        idle_after = None
+        if n_samples >= 12 and random.random() < 0.45:
+            idle_after = random.randint(4, n_samples - 4)
+
+        heading = random.uniform(0, 2 * 3.141592653589793)
+        efficiency = FUEL_EFFICIENCY_KM_PER_UNIT[fuel]
+        for sample_index, speed in enumerate(speeds):
+            if sample_index == idle_after:
+                emit("IDLE_START", speed=0.0, interval_seconds=120)
+                for _ in range(random.randint(2, 5)):
+                    emit(speed=0.0, interval_seconds=120)
+
+            travelled_km = speed * sample_seconds / 3600
+            odo += travelled_km
+            heading += random.uniform(-0.18, 0.18)
+            lat += travelled_km * 0.009 * math.cos(heading)
+            lon += travelled_km * 0.009 * math.sin(heading) / max(
+                0.5, math.cos(math.radians(lat))
+            )
+
+            if fuel == "ev":
+                soc = max(5.0, soc - travelled_km / efficiency / REFERENCE_BATTERY_KWH * 100)
+            else:
+                fuel_pct = max(5.0, fuel_pct - travelled_km / efficiency / REFERENCE_TANK_LITRES * 100)
+            emit(speed=speed, interval_seconds=round(sample_seconds))
+
+        emit("TRIP_END", speed=0.0, ignition=False)
+        if trip_index < n_trips - 1:
+            ts += timedelta(minutes=random.randint(25, 40))
 
     return events
 
@@ -196,13 +233,21 @@ def seed_telemetry(conn, vehicles):
     batch = []
     BATCH_SIZE = 2000
 
-    for vid, vin, fleet, make, model, year, fuel, *_ in vehicles:
+    for vehicle in vehicles:
+        vid, vin, fleet, make, model, year, fuel = vehicle[:7]
         seq_offset = 0
+        odo_start = float(vehicle[10])
+        # Keep a continuous odometer and route location across the vehicle's
+        # seeded days; the fuel/SOC gauge is reset each morning after refuelling.
+        lat_start = lon_start = None
         for day_offset in range(N_DAYS):
             day = base_date + timedelta(days=day_offset)
             # Inject 1 duplicate per vehicle per day to prove idempotency
-            events = generate_day_events(vin, fuel, day, seq_offset)
+            events = generate_day_events(vin, fuel, day, seq_offset, odo_start, lat_start, lon_start)
             if events:
+                odo_start = events[-1]["odo_km"]
+                lat_start = events[-1]["lat"]
+                lon_start = events[-1]["lon"]
                 events.append(events[0].copy())  # duplicate — will be dropped by ON CONFLICT
             seq_offset += len(events) + 1
             for e in events:
