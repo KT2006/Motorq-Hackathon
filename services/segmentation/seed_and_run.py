@@ -42,9 +42,24 @@ log = logging.getLogger("seeder")
 POSTGRES_URL = os.environ["POSTGRES_URL"].replace("postgres://", "postgresql://")
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
 TOPIC = os.getenv("TELEMETRY_TOPIC", "telemetry")
-N_FLEETS = int(os.getenv("SEED_FLEETS", "3"))
-N_VEHICLES = int(os.getenv("SEED_VEHICLES", "50"))
-N_DAYS = int(os.getenv("SEED_DAYS", "14"))
+
+# SEED_MODE controls the scale profile:
+#   demo  — 50 vehicles × 14 days  (fast, good for local dev / CI)
+#   full  — 100K vehicles × 1 day  (production-scale demo, uses multiprocessing)
+SEED_MODE = os.getenv("SEED_MODE", "demo").lower()
+
+if SEED_MODE == "full":
+    _default_vehicles = "100000"
+    _default_days = "1"
+    _default_fleets = "50"
+else:
+    _default_vehicles = "50"
+    _default_days = "14"
+    _default_fleets = "3"
+
+N_FLEETS = int(os.getenv("SEED_FLEETS", _default_fleets))
+N_VEHICLES = int(os.getenv("SEED_VEHICLES", _default_vehicles))
+N_DAYS = int(os.getenv("SEED_DAYS", _default_days))
 STREAM_EVENTS = int(os.getenv("SEED_STREAM_EVENTS", "60"))  # 60 live events after bulk load
 SKIP_IF_SEEDED = os.getenv("SKIP_IF_SEEDED", "true").lower() == "true"
 
@@ -84,7 +99,11 @@ FUEL_TYPES = ["petrol", "diesel", "hybrid", "ev"]
 FUEL_WEIGHTS = [0.45, 0.25, 0.10, 0.20]
 
 def seed_master_data(conn):
-    log.info("seeding master data: %d fleets, %d vehicles", N_FLEETS, N_VEHICLES)
+    """
+    Seed fleets + vehicles.
+    Uses execute_values with page_size=2000 for fast bulk inserts at 100K scale.
+    """
+    log.info("seeding master data: %d fleets, %d vehicles (mode=%s)", N_FLEETS, N_VEHICLES, SEED_MODE)
     fleets = []
     for i in range(N_FLEETS):
         fid = str(uuid.uuid4())
@@ -95,10 +114,11 @@ def seed_master_data(conn):
         psycopg2.extras.execute_values(cur, """
             INSERT INTO fleets (fleet_id, fleet_name, operator_name, fleet_type, region)
             VALUES %s ON CONFLICT DO NOTHING
-        """, fleets)
+        """, fleets, page_size=500)
 
     vehicles = []
     vins = []
+    # Build all rows in-memory first (fast for 100K — just Python objects)
     for i in range(N_VEHICLES):
         vid = str(uuid.uuid4())
         vin = gen_vin()
@@ -114,6 +134,7 @@ def seed_master_data(conn):
                           None, tank, battery, odo))
         vins.append((vin, fleet, fuel))
 
+    # Bulk-insert in pages of 2000 — dramatically faster than row-by-row at 100K
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(cur, """
             INSERT INTO vehicles
@@ -121,7 +142,7 @@ def seed_master_data(conn):
                engine_displacement_l, tank_capacity_l, battery_capacity_kwh,
                odometer_km_baseline)
             VALUES %s ON CONFLICT DO NOTHING
-        """, vehicles)
+        """, vehicles, page_size=2000)
 
     conn.commit()
     log.info("master data seeded: %d vehicles", N_VEHICLES)
@@ -375,24 +396,107 @@ def publish_stream_events(conn):
 # ─── main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    log.info("seeder starting: mode=%s vehicles=%d days=%d", SEED_MODE, N_VEHICLES, N_DAYS)
+
     wait_for_postgres(POSTGRES_URL)
     conn = psycopg2.connect(POSTGRES_URL)
     conn.autocommit = False
 
     if SKIP_IF_SEEDED and is_already_seeded(conn):
         log.info("database already seeded; skipping (set SKIP_IF_SEEDED=false to force re-seed)")
-        # Still publish stream events for live demo even if seeded
         publish_stream_events(conn)
         conn.close()
         return
 
     vehicles, vins = seed_master_data(conn)
-    seed_telemetry(conn, vehicles)
-    run_segmentation(conn)
-    run_cost_rollup(conn)
-    publish_stream_events(conn)
-    conn.close()
-    log.info("seeder_complete")
+
+    if SEED_MODE == "full":
+        # ── Full 100K mode: delegate telemetry generation to the multiprocessed
+        # simulator (data_simulator.py) via subprocess so we don't need to
+        # re-implement multiprocessing here. The simulator connects to Postgres
+        # directly and writes in parallel.
+        import subprocess
+        import multiprocessing as mp
+
+        simulator_path = Path(__file__).resolve().parent.parent.parent / "simulator" / "data_simulator.py"
+        n_workers = min(mp.cpu_count(), 8)
+        log.info(
+            "full mode: delegating telemetry to multiprocessed simulator "
+            "(%d workers, %d vehicles, %d day(s))",
+            n_workers, N_VEHICLES, N_DAYS,
+        )
+        conn.close()  # release connection before spawning subprocess
+
+        result = subprocess.run(
+            [
+                sys.executable, str(simulator_path),
+                "--mode", "bulk",
+                "--vehicles", str(N_VEHICLES),
+                "--days", str(N_DAYS),
+                "--workers", str(n_workers),
+            ],
+            env={**os.environ, "POSTGRES_URL": POSTGRES_URL},
+        )
+        if result.returncode != 0:
+            log.error("simulator exited with code %d", result.returncode)
+            sys.exit(result.returncode)
+
+        # Re-open connection for segmentation + cost rollup
+        conn = psycopg2.connect(POSTGRES_URL)
+        conn.autocommit = False
+
+        # In full mode, run segmentation + cost on a sample of vehicles
+        # (100K × full segmentation would take hours; sample gives you real analytics
+        # while the raw telemetry for all 100K vehicles is in the DB)
+        sample_size = int(os.getenv("SEED_SEGMENT_SAMPLE", "500"))
+        log.info(
+            "full mode: running segmentation on %d-vehicle sample "
+            "(all telemetry is in DB, sample gives analytics coverage)",
+            sample_size,
+        )
+        # Temporarily override the VIN list used by run_segmentation
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT v.vin, v.fuel_type
+                FROM vehicles v
+                WHERE EXISTS (SELECT 1 FROM telemetry_events te WHERE te.vin = v.vin LIMIT 1)
+                ORDER BY RANDOM()
+                LIMIT %s
+            """, (sample_size,))
+            sample_vins = cur.fetchall()
+
+        total_trips, total_idles = 0, 0
+        for vin, fuel_type in sample_vins:
+            vin = vin.strip()
+            rows = fetch_telemetry_for_vin(conn, vin)
+            if not rows:
+                continue
+            trips, idles = segment_vehicle(rows, vin, fuel_type)
+            clear_results_for_vin(conn, vin)
+            insert_trips(conn, trips)
+            insert_idle_events(conn, idles)
+            total_trips += len(trips)
+            total_idles += len(idles)
+        conn.commit()
+        log.info(
+            "sample segmentation done: vins=%d trips=%d idles=%d",
+            len(sample_vins), total_trips, total_idles,
+        )
+
+        run_cost_rollup(conn)
+        publish_stream_events(conn)
+        conn.close()
+        log.info("seeder_complete mode=full vehicles=%d", N_VEHICLES)
+
+    else:
+        # ── Demo mode: original single-process path (fast, good for local dev)
+        seed_telemetry(conn, vehicles)
+        run_segmentation(conn)
+        run_cost_rollup(conn)
+        publish_stream_events(conn)
+        conn.close()
+        log.info("seeder_complete mode=demo vehicles=%d", N_VEHICLES)
+
 
 if __name__ == "__main__":
     main()

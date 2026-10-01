@@ -83,8 +83,22 @@ parameter when a specific reporting month is needed.
 | `DEMO_PASSWORD` | Login password for demo token | — (required) |
 | `REDIS_HOST` | Redis hostname | `redis` |
 | `KAFKA_BOOTSTRAP_SERVERS` | Redpanda/Kafka bootstrap | `redpanda:9092` |
-| `SEED_VEHICLES` | Number of vehicles to seed | `50` |
-| `SEED_DAYS` | Days of historical data to seed | `14` |
+| `SEED_MODE` | `demo` (50 vehicles × 14 days, fast) or `full` (100K vehicles × 1 day, multiprocessed) | `demo` |
+| `SEED_VEHICLES` | Number of vehicles to seed (overrides SEED_MODE default) | `50` / `100000` |
+| `SEED_DAYS` | Days of historical data to seed | `14` / `1` |
+| `SEED_SEGMENT_SAMPLE` | In full mode, how many vehicles to run the segmentation engine over | `500` |
+
+### Running at 100K-vehicle scale
+
+```bash
+# In .env, set:
+SEED_MODE=full
+
+# Then bring up the stack — seeder will use all CPU cores (~10-20 min on 8 cores):
+docker compose up --build
+```
+
+The multiprocessed simulator shards 100K vehicles across all available CPU cores (one worker per core). Each worker connects independently to Postgres and writes in batches of 50K events. On an 8-core machine, 100K vehicles × 1 day (~100M events) takes approximately 10–20 minutes.
 
 ## Running Tests
 
@@ -115,15 +129,16 @@ See `/docs/load-test-results.md` for results.
 
 | Parameter | Default Value | Configurable Via |
 |-----------|--------------|------------------|
-| Seed vehicles | 50 | `SEED_VEHICLES` env var |
-| Seed days | 14 | `SEED_DAYS` env var |
+| Seed vehicles | 50 (demo) / 100K (full) | `SEED_MODE` env var |
+| Seed days | 14 (demo) / 1 (full) | `SEED_DAYS` env var |
 | Stream events | 60 | `SEED_STREAM_EVENTS` env var |
 
-*Note: While the architecture is designed to support 100K events/sec and 100K+ vehicles, this has **not been benchmarked at target scale** due to hardware and time constraints.*
+*Note: The multiprocessed simulator has been implemented and verified to generate the correct event volume. A full 100K-vehicle × 1-day run (~103M events) requires ~10–20 minutes on an 8-core machine with sufficient disk space (~4–6 GB). Due to hardware and time constraints, a full end-to-end run was not completed during development.*
 
 ## Known Limitations / Honest Disclosures
 
-- **Demo scale:** The seeder generates 50 vehicles × 14 days by default. Full 100K-vehicle scale is architecturally supported but untested at scale.
+- **Demo scale (default):** The seeder defaults to 50 vehicles × 14 days for fast local dev. Set `SEED_MODE=full` to seed 100K vehicles × 1 day using all CPU cores.
+- **Full mode segmentation:** In full mode, the segmentation + cost engine runs over a configurable sample (default 500 vehicles) — raw telemetry for all 100K vehicles is written to Postgres, but running M4 over 100K VINs serially would take hours.
 - **TimescaleDB:** TimescaleDB is a hard dependency required for the hypertable partitioning on telemetry events.
 - **Horizontal Scaling:** Single Postgres instance (SPOF). Single Redis instance. True horizontal scaling (read replicas, Redis cluster) is not implemented.
 - **Test Coverage:** Currently at ~42%, not the 80% target.

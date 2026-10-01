@@ -129,6 +129,12 @@ services:
     environment:
       POSTGRES_URL: postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      # SEED_MODE: demo runs 50 vehicles x 14 days (default, fast).
+      # Set SEED_MODE=full in your .env to run 100K vehicles x 1 day (multiprocessed).
+      SEED_MODE: ${SEED_MODE:-demo}
+      SEED_VEHICLES: ${SEED_VEHICLES:-50}
+      SEED_DAYS: ${SEED_DAYS:-14}
+      SEED_SEGMENT_SAMPLE: ${SEED_SEGMENT_SAMPLE:-500}
     volumes:
       - ./simulator:/app/simulator:ro
       - ./schema.sql:/app/schema.sql:ro

@@ -3,3 +3,5 @@ pandas>=2.2,<4
 Faker>=20
 kafka-python>=2.0
 python-dotenv>=1.0
+psycopg2-binary>=2.9
+SQLAlchemy>=2.0,<3
