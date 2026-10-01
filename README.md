@@ -192,10 +192,10 @@ sequenceDiagram
     SEED->>DB: Insert fleets and vehicles
     SEED->>SIM: Generate seven-day synthetic telemetry
     SIM->>DB: Bulk-write telemetry
-    SEED->>DB: Segment trips/idles; calculate daily costs
+    SEED->>DB: Segment trips/idles and calculate daily costs
     SEED->>RP: Publish 60 live demo events
     SEED-->>COMPOSE: Exit successfully after publish
-    Note over RP,INGEST: Consumer processes live events asynchronously; the seed does not wait for Redis updates
+    Note over RP,INGEST: Consumer processes live events asynchronously, seed does not wait for Redis updates
     RP->>INGEST: Deliver telemetry batch
     INGEST->>DB: Validate and idempotently persist events
     INGEST->>CACHE: Update latest vehicle status
