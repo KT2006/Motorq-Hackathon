@@ -6,7 +6,7 @@ Commercial fleets incur avoidable operating costs through engine idling and poor
 
 ## Architecture
 
-This product processes raw telemetry events into distinct trips and idle events, then calculates precise fuel and idling costs. It surfaces this intelligence via a React dashboard and an Agentic AI assistant.
+This product processes raw telemetry events into distinct trips and idle events, then calculates precise fuel and idling costs. It surfaces this intelligence via a React dashboard and an AI assistant that receives database-backed fleet context before generating responses.
 
 **Full streaming pipeline:**
 
@@ -64,6 +64,11 @@ currency conversion.
 **API Docs:** http://localhost:8000/docs  
 **API health:** http://localhost:8000/health
 
+The fleet overview defaults to the latest month with available cost data, so
+the dashboard remains populated even when the stack is first started on the
+first day of a new month. The API also accepts an explicit `month` query
+parameter when a specific reporting month is needed.
+
 > To connect to your existing Supabase dataset instead of the local Postgres, set `POSTGRES_URL=postgresql://user:pass@host:5432/postgres` in `.env`. The local Postgres service is skipped when an external URL is provided.
 
 ## Environment Variables
@@ -72,7 +77,8 @@ currency conversion.
 |---|---|---|
 | `POSTGRES_URL` | PostgreSQL connection string | `postgresql://fleet_user:fleet_pass@postgres:5432/fleet_db` (local) |
 | `JWT_SECRET` | Secret used for API authentication | — (required) |
-| `GROQ_API_KEY` | API Key for the AI Agent (via Groq) | — (required for /chat) |
+| `GROQ_API_KEY` | API key for general (non-fleet-data) assistant chat via Groq | — |
+| `GROQ_MODEL` | Groq model used by the AI Agent | `openai/gpt-oss-20b` |
 | `DEMO_USERNAME` | Login username for demo token | `admin` |
 | `DEMO_PASSWORD` | Login password for demo token | — (required) |
 | `REDIS_HOST` | Redis hostname | `redis` |
@@ -128,7 +134,7 @@ See `/docs/load-test-results.md` for results.
 
 ### AI Assistance
 - **Google Antigravity (Agentic IDE Assistant)** — Used for: architecture/module planning, scaffolding the segmentation state machine (M4) and cost calculation engine (M5), drafting documentation (ADRs, README), and test suite generation. All architectural decisions (storage choices, CAP/PACELC trade-offs, scoring methodology) were made and understood by the team.
-- **Groq API / `llama3-8b-8192`** — Used as the underlying LLM for the M9 Agentic AI Layer.
+- **Groq API / `openai/gpt-oss-20b`** — Used to generate M9 assistant responses from database-backed fleet context (`GROQ_MODEL` can override it).
 
 ### Key Open Source Libraries
 - **FastAPI / Uvicorn** — Backend API framework
@@ -141,4 +147,4 @@ See `/docs/load-test-results.md` for results.
 - **Locust** — Load testing
 - **React / Vite** — Frontend dashboard
 - **Recharts** — Dashboard data visualization
-- **OpenAI Python SDK** — AI agent tool-calling client
+- **OpenAI Python SDK** — OpenAI-compatible client for Groq general chat

@@ -22,11 +22,12 @@ jobs:
           pip install -r services/segmentation/requirements.txt
           pip install -r services/api/requirements.txt
           pip install -r services/ingestion/requirements.txt
+          pip install -r simulator/requirements.txt
           pip install pytest pytest-cov
 
       - name: Run unit tests with coverage
         run: |
-          pytest tests/test_cost_calc.py tests/test_cost_engine_logic.py tests/test_simulator.py tests/test_config.py tests/test_segmentation.py \
+          pytest tests/test_cost_calc.py tests/test_cost_engine_logic.py tests/test_simulator.py tests/test_config.py tests/test_segmentation.py tests/test_seed_profile.py \
             --cov=services/segmentation \
             --cov-report=term-missing \
             --cov-report=html:docs/evidence/coverage-html \
@@ -87,8 +88,8 @@ jobs:
 
       - name: Run Smoke Tests
         run: |
-          pip install pytest httpx python-dotenv PyJWT
-          PYTHONPATH=. API_BASE_URL=http://localhost:8000 POSTGRES_URL=postgresql://fleet_user:fleet_pass@localhost:5432/fleet_db DEMO_USERNAME=admin DEMO_PASSWORD=your_secure_password_here pytest tests/ -v
+          pip install pytest requests python-dotenv
+          API_BASE_URL=http://localhost:8000 DEMO_USERNAME=admin DEMO_PASSWORD=your_secure_password_here pytest tests/test_smoke.py -v
 
   docker-build:
     runs-on: ubuntu-latest

@@ -5,6 +5,14 @@ import remarkGfm from 'remark-gfm';
 import api from '../api';
 
 export default function AIAssistant() {
+  const [reportPeriod] = useState(() => {
+    const toDate = new Date();
+    const fromDate = new Date(toDate.getTime() - 29 * 86400000);
+    return {
+      from_date: fromDate.toISOString().slice(0, 10),
+      to_date: toDate.toISOString().slice(0, 10)
+    };
+  });
   const [messages, setMessages] = useState([
     { role: 'system', content: 'Hello! I am your AI Fleet Assistant. You can ask me to analyze the worst offenders, check a specific vehicle, or summarize your fleet costs.' }
   ]);
@@ -32,8 +40,7 @@ export default function AIAssistant() {
     try {
       const response = await api.post('/chat', {
         query: userQuery,
-        from_date: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
-        to_date: new Date().toISOString().slice(0, 10)
+        ...reportPeriod
       });
 
       const { answer, tool_calls } = response.data;
@@ -60,7 +67,7 @@ export default function AIAssistant() {
     <div className="fade-in" style={{ height: 'calc(100vh - 80px)', display: 'flex', flexDirection: 'column' }}>
       <header className="page-header">
         <h1>AI Fleet Assistant</h1>
-        <p>Ask plain-English questions about your fleet data.</p>
+        <p>Ask plain-English questions about your fleet data. Answers use database figures for the rolling 30-day period shown in each response.</p>
       </header>
 
       <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>

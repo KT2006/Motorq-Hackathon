@@ -1,0 +1,5 @@
+numpy>=2.1,<3
+pandas>=2.2,<4
+Faker>=20
+kafka-python>=2.0
+python-dotenv>=1.0

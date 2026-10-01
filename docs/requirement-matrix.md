@@ -10,7 +10,7 @@
 | R6 | Schema validation on ingest | `consumer.py` — Pydantic `TelemetryEvent` model | `tests/test_api_contracts.py` (8+ tests) | ✅ Done |
 | R7 | Idempotent ingestion (dedup) | `ON CONFLICT (vin, ts, seq) DO NOTHING` | `tests/test_ingestion_idempotency.py`, seeder injects duplicates | ✅ Done |
 | R8 | React dashboard with overview, leaderboard, drill-down | `dashboard/src/components/` — 4 views | Visual inspection + smoke test | ✅ Done |
-| R9 | AI agent with tool-calling | `services/api/main.py` — `/chat` + Groq LLM | Agent audit log in `agent_logs` table | ✅ Done |
+| R9 | Assistant answers grounded in fleet data | `services/api/main.py` — `/chat` supplies SQL metrics as LLM context | `tests/test_ai_assistant.py`; audit log in `agent_logs` | ✅ Done |
 | R10 | JWT authentication | `main.py` — `verify_token()` + `/token` | Auth required on all data endpoints | ✅ Done |
 | R11 | Rate limiting | `slowapi` on all endpoints (100/min, 20/min for chat) | Rate limit headers in API responses | ✅ Done |
 | R12 | Docker Compose one-command startup | `docker-compose.yml` — 6 services | `docker compose up --build` | ✅ Done |

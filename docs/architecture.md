@@ -16,13 +16,13 @@ C4Context
     System(sys, "Fleet Intelligence Platform", "Ingests raw telemetry, computes cost, surfaces insight via dashboard and AI agent.")
 
     System_Ext(telematics, "Vehicle Telematics Devices", "GPS + OBD-II dongles on every vehicle. Emit position, speed, fuel, ignition events.")
-    System_Ext(groq, "Groq LLM API", "Hosts the language model powering the AI agent (llama3-8b-8192).")
+    System_Ext(groq, "Groq LLM API", "Writes answers using compact, authoritative fleet context queried from PostgreSQL.")
     System_Ext(supabase, "Supabase (optional)", "Managed Postgres hosting for production deployments.")
 
     Rel(telematics, sys, "Streams raw telemetry events", "Kafka/Redpanda")
     Rel(fm, sys, "Views dashboard, queries AI agent", "HTTPS / React")
     Rel(admin, sys, "Manages fleet data", "HTTPS / React")
-    Rel(sys, groq, "Sends tool-calling LLM requests", "HTTPS / REST")
+    Rel(sys, groq, "Sends fleet context and user prompt", "HTTPS / REST")
     Rel(sys, supabase, "Reads/writes structured data", "TLS / PostgreSQL wire")
 ```
 
@@ -51,7 +51,7 @@ flowchart TD
     RD --> API
 
     API --> DASH["React Dashboard\nFleet overview\nOffender leaderboard\nVehicle drill-down\nLive status card"]
-    API --> AI["AI Agent\nTool-calling loop\nRead-only tools\nAudit log to agent_logs"]
+    API --> AI["AI Assistant\nSQL-grounded context + user prompt\nLLM-generated response\nAudit log to agent_logs"]
 
     DASH --> FM["Fleet Manager"]
     AI --> FM
@@ -176,7 +176,7 @@ flowchart LR
     end
 
     subgraph "External"
-        GROQ_E["Groq API\nllama3-8b-8192"]
+        GROQ_E["Groq API\nopenai/gpt-oss-20b"]
         SIM_E["Simulator\ndata_simulator.py"]
     end
 
@@ -229,31 +229,33 @@ sequenceDiagram
 
 ---
 
-## 7. AI Agent Tool-Calling Sequence
+## 7. AI Assistant Context-Grounded Response Flow
 
 ```mermaid
 sequenceDiagram
     participant U as User (Dashboard)
     participant API as FastAPI /chat
-    participant LLM as Groq LLM
     participant DB as PostgreSQL
+    participant LLM as Groq LLM
     participant LOG as audit_log
 
     U->>API: POST /chat {query, from_date, to_date}
     API->>API: verify JWT, extract fleet_id
     API->>LOG: audit_log(user, "ai_query", "chat")
-
-    loop max 5 iterations, 30s timeout
-        API->>LLM: chat.completions.create(messages, tools)
-        LLM-->>API: tool_call: get_fleet_offenders(limit=10)
-        API->>API: validate & clamp limit (1-50)
-        API->>DB: SELECT offenders query
-        DB-->>API: offender rows
-        API->>LLM: tool result as message
-        LLM-->>API: final text response (no more tool calls)
+    alt Fleet-data question
+        API->>DB: Aggregate costs, idle time, utilisation for requested dates
+        DB-->>API: Authoritative metrics
+        opt Ranking or vehicle-list question
+            API->>DB: Select highest idle-cost vehicles for same dates and fleet
+            DB-->>API: Vehicle rows
+        end
+        API->>LLM: Authoritative database context + user prompt
+        LLM-->>API: Context-grounded response
+    else General question
+        API->>LLM: User prompt
+        LLM-->>API: General response
     end
 
     API->>DB: INSERT INTO agent_logs
-    API-->>U: {answer, tool_calls}
+    API-->>U: {answer, tool_calls: []}
 ```
-

@@ -36,14 +36,14 @@
 **Alternatives Considered:** Single-metric ranking (idle minutes only), ML clustering, percentile-based.  
 **Consequences:** Provably better signal than naive threshold (test_cost_calc.py demonstrates a case where rankings differ). Weights are tunable per fleet operator. Trade-off: score is relative to the fleet, not absolute.
 
-## ADR-5: Tool-calling LLM agent over RAG/vector-store
+## ADR-5: Database-backed assistant answers over RAG/vector-store
 
 **Status:** Accepted  
 **Date:** 2026-09-29  
-**Context:** AI assistant needs to answer fleet questions using real data. Options: vector-store RAG over documents, direct SQL generation, or tool-calling with structured API endpoints.  
-**Decision:** Groq-hosted LLM (llama/mixtral) with tool-calling. Two tools: get_fleet_offenders and get_vehicle_cost_summary. Bounded loop (max 5 iterations, 30s timeout).  
-**Alternatives Considered:** Vector-store RAG (overkill for structured data), text-to-SQL (injection risk), pre-computed answers.  
-**Consequences:** Grounded in real data (tool results, not hallucinations). Read-only tools prevent data mutation. Audit trail via agent_logs table. Trade-off: depends on external LLM API availability; graceful fallback added.
+**Context:** Fleet metrics must remain accurate and consistent across assistant responses.
+**Decision:** Query fleet metrics with parameterized PostgreSQL aggregates, pass the compact results and date/fleet scope as authoritative context to the Groq-hosted LLM, then return its answer to the user. Do not expose direct SQL generation or allow the model to fetch fleet data itself.
+**Alternatives Considered:** Vector-store RAG (overkill for structured data), text-to-SQL (injection risk), deterministic templates that do not let the model formulate the response.
+**Consequences:** Each turn receives fresh database context for the same pinned reporting period; recommendations can be conversational while measured figures originate from SQL. The external model can still misstate context, so its prompt explicitly forbids invented values and savings; the service remains dependent on Groq availability.
 
 ## Storage Role Justification
 
@@ -52,4 +52,4 @@
 | PostgreSQL (TimescaleDB) | Telemetry, trips, idles, costs, audit | SQL joins for cost rollup, ACID for idempotent writes, TimescaleDB for time-series compression | Consumer retries on connection failure; ON CONFLICT prevents double-counting |
 | Redis | Live vehicle status cache | Sub-ms reads for dashboard polling, TTL for stale data cleanup | Dashboard shows "no stream data yet" if Redis unavailable; non-critical path |
 | Redpanda | Event streaming | Kafka-compatible log for replay/reprocessing, consumer groups for parallelism | Consumer lag increases during outage; drains on recovery; no data loss with committed offsets |
-| No vector store | AI agent uses tool-calling, not RAG | Structured fleet data is better served by SQL queries than semantic search | N/A |
+| No vector store | Fleet metrics are queried directly with SQL | Structured fleet data is better served by SQL than semantic search | N/A |

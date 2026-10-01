@@ -42,13 +42,12 @@ class TestSmokeJourney:
         headers = {"Authorization": f"Bearer {token}"}
 
         now = datetime.now()
-        month_str = f"{now.year}-{now.month:02d}-01"
         from_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
         to_date = now.strftime("%Y-%m-%d")
 
-        # 2. Call /fleet/summary
+        # 2. Call /fleet/summary using its latest-data-month default.
         summary_response = requests.get(
-            f"{API_BASE_URL}/fleet/summary?month={month_str}", 
+            f"{API_BASE_URL}/fleet/summary",
             headers=headers,
             timeout=5
         )

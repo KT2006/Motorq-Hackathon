@@ -50,10 +50,8 @@ const fetchAPI = async (endpoint, options = {}) => {
 
 const today = () => new Date().toISOString().slice(0, 10);
 const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
-const monthStart = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`; };
-
-export const getFleetSummary = (month = monthStart()) =>
-  fetchAPI(`/fleet/summary?month=${month}`);
+export const getFleetSummary = (month) =>
+  fetchAPI(`/fleet/summary${month ? `?month=${encodeURIComponent(month)}` : ''}`);
 
 export const getTopOffenders = (limit = 10, from = daysAgo(30), to = today()) =>
   fetchAPI(`/fleet/offenders?limit=${limit}&from_date=${from}&to_date=${to}`);
