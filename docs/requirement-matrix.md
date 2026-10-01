@@ -1,24 +1,36 @@
-# Requirement Traceability Matrix
+# Requirement Traceability and Evidence
 
-| # | Requirement | Implementation Path | Test/Evidence | Status |
-|---|-------------|-------------------|---------------|--------|
-| R1 | Process raw telemetry into trips and idle events | `services/segmentation/segment.py` — O(n) state-machine | `tests/test_segmentation.py` (5 tests) | ✅ Done |
-| R2 | Calculate fuel and idle costs per vehicle per day | `services/segmentation/cost_engine.py` — ROLLUP_SQL | `tests/test_cost_calc.py` (4 tests) | ✅ Done |
-| R3 | Top-K worst offenders ranking (weighted vs naive) | `cost_engine.py` TOP_K_WEIGHTED_SQL + `/fleet/offenders` | `test_cost_calc.py::test_baseline_vs_weighted_score_disagree` | ✅ Done |
-| R4 | Live vehicle status (Redis cache) | `services/ingestion/consumer.py` → Redis hash | `/vehicles/{vin}/live-status` endpoint | ✅ Done |
-| R5 | Streaming ingestion (Redpanda) | `services/ingestion/consumer.py` + `producer.py` | Consumer lag logging, DLQ for malformed events | ✅ Done |
-| R6 | Schema validation on ingest | `consumer.py` — Pydantic `TelemetryEvent` model | `tests/test_api_contracts.py` (8+ tests) | ✅ Done |
-| R7 | Idempotent ingestion (dedup) | `ON CONFLICT (vin, ts, seq) DO NOTHING` | `tests/test_ingestion_idempotency.py`, seeder injects duplicates | ✅ Done |
-| R8 | React dashboard with overview, leaderboard, drill-down | `dashboard/src/components/` — 4 views | Visual inspection + smoke test | ✅ Done |
-| R9 | Assistant answers grounded in fleet data | `services/api/main.py` — `/chat` supplies SQL metrics as LLM context | `tests/test_ai_assistant.py`; audit log in `agent_logs` | ✅ Done |
-| R10 | JWT authentication | `main.py` — `verify_token()` + `/token` | Auth required on all data endpoints | ✅ Done |
-| R11 | Rate limiting | `slowapi` on all endpoints (100/min, 20/min for chat) | Rate limit headers in API responses | ✅ Done |
-| R12 | Docker Compose one-command startup | `docker-compose.yml` — 6 services | `docker compose up --build` | ✅ Done |
-| R13 | 100K+ vehicle synthetic data | `simulator/data_simulator.py` — multiprocessing-ready | Documented scaling path | ⚠️ Architecture supports, demo seeds 50 |
-| R14 | 100K events/sec throughput target | Architecture supports it, benchmark needed | `locustfile.py` for load testing | ⚠️ Not benchmarked at target scale |
-| R15 | 80%+ test coverage | `pytest --cov` on segmentation modules | `docs/coverage-report.txt` | ⚠️ Current: ~42% |
-| R16 | Security scan | Trivy container scan | `docs/trivy_scan_api.txt` | ✅ Done |
-| R17 | ADRs (3-5) | `docs/adrs.md` | 5 ADRs documented | ✅ Done |
-| R18 | OpenAPI spec | `docs/openapi.json` | Sync with running API | ✅ Done |
-| R19 | Fleet/tenant isolation | JWT `fleet_id` claim + API query filtering | Negative tests in test_security.py | ✅ Done |
-| R20 | Audit logging | `audit_log` table + middleware | Data access and AI queries logged | ✅ Done |
+Status describes evidence actually available in this repository or the local
+run. “Implemented” does not imply the scale, security, or reliability target
+has been independently validated.
+
+| # | Requirement | Implementation | Evidence | Status |
+|---|---|---|---|---|
+| R1 | Segment telemetry into trips and idles | `services/segmentation/segment.py` O(n) state machine | `tests/test_segmentation.py`, `tests/test_seed_profile.py` | **Implemented; unit tested** |
+| R2 | Daily vehicle fuel/idle cost rollups | `services/segmentation/cost_engine.py` | `tests/test_cost_calc.py`, `tests/test_cost_engine_logic.py`; fresh run produced 7,000 daily rows | **Implemented; local demo verified** |
+| R3 | Rank idle-cost offenders | Weighted score and `/fleet/offenders` | Cost calculation tests; API returned 1,000 total offenders in fresh demo | **Implemented; local demo verified** |
+| R4 | Live status cache | Ingestion consumer updates Redis; API reads live status | Redis and endpoint exist; live cache behavior is not fully covered by the fresh-seed count check | **Partial** |
+| R5 | Streaming ingestion | Redpanda consumer and batch Postgres writes | 10,000-event local functional check; ~8,234 events/s end-to-end | **Implemented; throughput target unmet** |
+| R6 | Validate telemetry schemas | Pydantic event model | `tests/test_api_contracts.py` | **Implemented; contract tests exist** |
+| R7 | Idempotent ingestion | Unique event key and `ON CONFLICT DO NOTHING` | `tests/test_ingestion_idempotency.py`; duplicate events in simulator | **Implemented; tests exist** |
+| R8 | Useful web dashboard | Overview, paginated leaderboard, vehicle detail, assistant | Fresh local dashboard/API smoke check; UI walkthrough still needed in submission video | **Local demo verified** |
+| R9 | Fleet-data-aware assistant | SQL context is passed to optional Groq LLM | `tests/test_ai_assistant.py`; depends on external key/service | **Implemented; optional path** |
+| R10 | JWT authentication | `/token` and protected routes | Fresh Compose login and protected API request succeeded | **Local demo verified; demo credentials only** |
+| R11 | API rate limiting | SlowAPI route limits | Configured in API; no current soak/burst validation | **Implemented; load behavior partial** |
+| R12 | One-command local start | Docker Compose services; API waits for seeder | Fresh `docker compose up --build` completed after fixing a Decimal-capacity failure | **Local workflow verified** |
+| R13 | At least 100K simulated vehicles | `SEED_MODE=full` code path | Full profile is 100K × 1 day but has not been run; verified default is 1K × 7 days | **Not verified; acceptance target unmet** |
+| R14 | 100K events/s and 3× five-minute burst without loss | Redpanda + consumer; performance harness | Short local stream result ~8.2K events/s; no sustained 100K or burst test | **Not met / not verified** |
+| R15 | At least 80% core-service coverage | Pytest/coverage workflow | Saved focused run reports 35% total across measured modules; not a full current-suite report | **Not met** |
+| R16 | Security scan | Trivy report in `docs/trivy_scan_api.txt` | Saved scan is for an earlier image: 44 HIGH, 53 MEDIUM, 0 CRITICAL | **Partial; rescan current images** |
+| R17 | 3–5 architecture decisions | `docs/adrs.md` | Five ADRs documented | **Documented** |
+| R18 | Current OpenAPI contract | `docs/openapi.json` | File exists; synchronization with latest API changes has not been confirmed | **Partial; regenerate/compare** |
+| R19 | Tenant isolation | JWT fleet claim and query filters | `tests/test_security.py` | **Implemented; expand endpoint-level authorization tests** |
+| R20 | Audit trail for data access and AI actions | `audit_log` and `agent_logs` | Selected reads and chat calls log; failures are swallowed/logged and coverage is not comprehensive | **Partial; not every access guaranteed** |
+| D1 | Completed solution document and ≤5-minute demo video | `docs/solution.md` and recording | Solution write-up is a project summary; team/submission metadata and video link are not provided | **Pending completion** |
+| D2 | Cloud deployment, cloud agnosticism, HA | Kubernetes and Terraform scaffolding | Artifacts are explicitly untested; local Compose is single-node | **Planned / unverified** |
+| D3 | Observability, privacy, compliance, erasure | Logs and lifecycle notes | No verified centralized metrics/traces, location masking, or right-to-erasure flow | **Not demonstrated** |
+
+The challenge's minimum bar includes a working **100,000-vehicle** dataset;
+neither a 1,000- nor a 50,000-vehicle run should be represented as satisfying
+that requirement. A dataset-size pass also does not establish the separate
+100,000-events/sec throughput or burst requirement.

@@ -33,7 +33,19 @@ POST     /token                                                                 
 
 *\* Note: The high failure rate was by design, as the API enforces a strict rate limit (`100/minute`), so most requests naturally resulted in `429 Too Many Requests`. This accurately tests that the API rate limiter handles high-load floods defensively.*
 
-**Key Takeaways:**
-- Reached **~129 req/s** sustained throughput locally on the API. 
-- `p50` latency was incredibly fast (**2ms** for `GET /fleet/summary`).
-- Validates the architectural choice of the `cost_summary_daily` roll-ups. By avoiding scanning 2 million telemetry rows on-the-fly and instead querying the rolled-up Postgres table, the backend serves complex analytical queries in single-digit milliseconds.
+**Interpretation:** This run is **not a successful 129 req/s API capacity
+result**. The aggregate includes 94.39% failures, mostly rate-limited
+responses; the reported request rate counts failed requests too. It shows that
+the rate limiter rejects excess traffic, not that the application serves
+that load successfully. The low successful-response median does not establish
+tail latency or behavior under a representative workload.
+
+## Local Compose Smoke Load (2026-10-01)
+
+After a fresh balanced-profile seed, Locust ran for 30 seconds with 10 users
+spawning at 2 users/second against the live API. It completed 237 requests
+with no failures: 7.98 requests/sec aggregate, 23 ms average response time,
+and 38 ms p95 (43 ms p99). This limited local smoke run is below the 200 ms
+API p95 target, but does not meet the requirement for sustained or scale
+testing. It is not a 50-user soak or an ingestion-throughput test; the earlier
+run above is separate and had a high failure rate.

@@ -3,14 +3,14 @@ seed_and_run.py — One-shot seeder for docker compose up.
 
 Execution order:
   1. Wait for Postgres to be reachable
-  2. Generate a small synthetic fleet (50 vehicles, 14 days)
+  2. Generate a balanced synthetic fleet (1,000 vehicles, 7 days by default)
   3. Load master data (fleets, vehicles, drivers) into Postgres
   4. Load telemetry_events (bulk Parquet -> Postgres)
   5. Run M4 segmentation engine
   6. Run M5 cost rollup engine
   7. Refresh monthly_fleet_cost materialized view
   8. Publish a stream of live events to Redpanda (for live-status demo)
-  9. Exit cleanly — compose restarts are not expected
+  9. Exit cleanly — subsequent invocations skip complete existing data
 
 All parameters are configurable via env vars to keep the compose file clean.
 """
@@ -44,18 +44,25 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
 TOPIC = os.getenv("TELEMETRY_TOPIC", "telemetry")
 
 # SEED_MODE controls the scale profile:
-#   demo  — 50 vehicles × 14 days  (fast, good for local dev / CI)
-#   full  — 100K vehicles × 1 day  (production-scale demo, uses multiprocessing)
-SEED_MODE = os.getenv("SEED_MODE", "demo").lower()
+#   demo      — 50 vehicles × 14 days (small, fast profile)
+#   balanced  — 1K vehicles × 7 days (local weekly insight dataset)
+#   full      — 100K vehicles × 1 day (hackathon scale requirement)
+SEED_MODE = os.getenv("SEED_MODE", "balanced").lower()
 
 if SEED_MODE == "full":
     _default_vehicles = "100000"
     _default_days = "1"
     _default_fleets = "50"
-else:
+elif SEED_MODE == "balanced":
+    _default_vehicles = "1000"
+    _default_days = "7"
+    _default_fleets = "10"
+elif SEED_MODE == "demo":
     _default_vehicles = "50"
     _default_days = "14"
     _default_fleets = "3"
+else:
+    raise ValueError("SEED_MODE must be 'demo', 'balanced', or 'full'")
 
 N_FLEETS = int(os.getenv("SEED_FLEETS", _default_fleets))
 N_VEHICLES = int(os.getenv("SEED_VEHICLES", _default_vehicles))
@@ -84,9 +91,14 @@ def wait_for_postgres(url: str, retries: int = 30):
 
 def is_already_seeded(conn) -> bool:
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM vehicles")
-        count = cur.fetchone()[0]
-    return count > 0
+        cur.execute("""
+            SELECT
+                EXISTS (SELECT 1 FROM vehicles),
+                EXISTS (SELECT 1 FROM telemetry_events),
+                EXISTS (SELECT 1 FROM cost_summary_daily)
+        """)
+        has_vehicles, has_telemetry, has_summaries = cur.fetchone()
+    return has_vehicles and has_telemetry and has_summaries
 
 # ─── master data ──────────────────────────────────────────────────────────────
 
@@ -170,6 +182,8 @@ def generate_day_events(
     odo_start: float | None = None,
     lat_start: float | None = None,
     lon_start: float | None = None,
+    tank_capacity_l: float = REFERENCE_TANK_LITRES,
+    battery_capacity_kwh: float = REFERENCE_BATTERY_KWH,
 ):
     """Generate one plausible 10-hour fleet shift of telemetry for one vehicle."""
     events = []
@@ -236,9 +250,9 @@ def generate_day_events(
             )
 
             if fuel == "ev":
-                soc = max(5.0, soc - travelled_km / efficiency / REFERENCE_BATTERY_KWH * 100)
+                soc = max(5.0, soc - travelled_km / efficiency / battery_capacity_kwh * 100)
             else:
-                fuel_pct = max(5.0, fuel_pct - travelled_km / efficiency / REFERENCE_TANK_LITRES * 100)
+                fuel_pct = max(5.0, fuel_pct - travelled_km / efficiency / tank_capacity_l * 100)
             emit(speed=speed, interval_seconds=round(sample_seconds))
 
         emit("TRIP_END", speed=0.0, ignition=False)
@@ -256,6 +270,8 @@ def seed_telemetry(conn, vehicles):
 
     for vehicle in vehicles:
         vid, vin, fleet, make, model, year, fuel = vehicle[:7]
+        tank_capacity_l = float(vehicle[8]) if vehicle[8] is not None else REFERENCE_TANK_LITRES
+        battery_capacity_kwh = float(vehicle[9]) if vehicle[9] is not None else REFERENCE_BATTERY_KWH
         seq_offset = 0
         odo_start = float(vehicle[10])
         # Keep a continuous odometer and route location across the vehicle's
@@ -264,7 +280,10 @@ def seed_telemetry(conn, vehicles):
         for day_offset in range(N_DAYS):
             day = base_date + timedelta(days=day_offset)
             # Inject 1 duplicate per vehicle per day to prove idempotency
-            events = generate_day_events(vin, fuel, day, seq_offset, odo_start, lat_start, lon_start)
+            events = generate_day_events(
+                vin, fuel, day, seq_offset, odo_start, lat_start, lon_start,
+                tank_capacity_l, battery_capacity_kwh,
+            )
             if events:
                 odo_start = events[-1]["odo_km"]
                 lat_start = events[-1]["lat"]
@@ -404,26 +423,28 @@ def main():
 
     if SKIP_IF_SEEDED and is_already_seeded(conn):
         log.info("database already seeded; skipping (set SKIP_IF_SEEDED=false to force re-seed)")
-        publish_stream_events(conn)
         conn.close()
+        log.info("seeder_complete mode=%s vehicles=%d skipped=true", SEED_MODE, N_VEHICLES)
         return
 
     vehicles, vins = seed_master_data(conn)
 
-    if SEED_MODE == "full":
-        # ── Full 100K mode: delegate telemetry generation to the multiprocessed
+    if SEED_MODE in ("balanced", "full"):
+        # ── Scaled modes delegate telemetry generation to the multiprocessed
         # simulator (data_simulator.py) via subprocess so we don't need to
         # re-implement multiprocessing here. The simulator connects to Postgres
         # directly and writes in parallel.
         import subprocess
         import multiprocessing as mp
 
-        simulator_path = Path(__file__).resolve().parent.parent.parent / "simulator" / "data_simulator.py"
+        # Inside the container, simulator/ is volume-mounted at /app/simulator/
+        # Path(__file__) = /app/seed_and_run.py, so .parent = /app
+        simulator_path = Path(__file__).resolve().parent / "simulator" / "data_simulator.py"
         n_workers = min(mp.cpu_count(), 8)
         log.info(
-            "full mode: delegating telemetry to multiprocessed simulator "
+            "%s mode: delegating telemetry to multiprocessed simulator "
             "(%d workers, %d vehicles, %d day(s))",
-            n_workers, N_VEHICLES, N_DAYS,
+            SEED_MODE, n_workers, N_VEHICLES, N_DAYS,
         )
         conn.close()  # release connection before spawning subprocess
 
@@ -434,6 +455,7 @@ def main():
                 "--vehicles", str(N_VEHICLES),
                 "--days", str(N_DAYS),
                 "--workers", str(n_workers),
+                "--skip-master",   # master data already seeded above
             ],
             env={**os.environ, "POSTGRES_URL": POSTGRES_URL},
         )
@@ -445,33 +467,36 @@ def main():
         conn = psycopg2.connect(POSTGRES_URL)
         conn.autocommit = False
 
-        # In full mode, run segmentation + cost on a sample of vehicles
-        # (100K × full segmentation would take hours; sample gives you real analytics
-        # while the raw telemetry for all 100K vehicles is in the DB)
-        sample_size = int(os.getenv("SEED_SEGMENT_SAMPLE", "500"))
-        log.info(
-            "full mode: running segmentation on %d-vehicle sample "
-            "(all telemetry is in DB, sample gives analytics coverage)",
-            sample_size,
+        # Analyze every balanced-profile vehicle; keep full-scale startup bounded.
+        segment_sample_size = (
+            N_VEHICLES if SEED_MODE == "balanced"
+            else int(os.getenv("SEED_SEGMENT_SAMPLE", "500"))
         )
-        # Temporarily override the VIN list used by run_segmentation
+        log.info(
+            "%s mode: segmenting %d vehicles (all telemetry is in DB)",
+            SEED_MODE, segment_sample_size,
+        )
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT v.vin, v.fuel_type
+                SELECT v.vin, v.fuel_type, v.tank_capacity_l, v.battery_capacity_kwh
                 FROM vehicles v
                 WHERE EXISTS (SELECT 1 FROM telemetry_events te WHERE te.vin = v.vin LIMIT 1)
-                ORDER BY RANDOM()
+                ORDER BY v.vin
                 LIMIT %s
-            """, (sample_size,))
+            """, (segment_sample_size,))
             sample_vins = cur.fetchall()
 
         total_trips, total_idles = 0, 0
-        for vin, fuel_type in sample_vins:
+        for vin, fuel_type, tank_capacity_l, battery_capacity_kwh in sample_vins:
             vin = vin.strip()
             rows = fetch_telemetry_for_vin(conn, vin)
             if not rows:
                 continue
-            trips, idles = segment_vehicle(rows, vin, fuel_type)
+            trips, idles = segment_vehicle(
+                rows, vin, fuel_type,
+                tank_capacity_l=tank_capacity_l or REFERENCE_TANK_LITRES,
+                battery_capacity_kwh=battery_capacity_kwh or REFERENCE_BATTERY_KWH,
+            )
             clear_results_for_vin(conn, vin)
             insert_trips(conn, trips)
             insert_idle_events(conn, idles)
@@ -486,7 +511,7 @@ def main():
         run_cost_rollup(conn)
         publish_stream_events(conn)
         conn.close()
-        log.info("seeder_complete mode=full vehicles=%d", N_VEHICLES)
+        log.info("seeder_complete mode=%s vehicles=%d", SEED_MODE, N_VEHICLES)
 
     else:
         # ── Demo mode: original single-process path (fast, good for local dev)

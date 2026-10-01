@@ -1,11 +1,32 @@
+import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Activity, Car, LayoutDashboard, Settings, Sparkles } from 'lucide-react';
+import { Activity, Car, LayoutDashboard, Sparkles, LogOut } from 'lucide-react';
 import Overview from './components/Overview';
 import Leaderboard from './components/Leaderboard';
 import VehicleDetail from './components/VehicleDetail';
 import AIAssistant from './components/AIAssistant';
+import Login from './components/Login';
+import { getToken, clearToken } from './api';
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(!!getToken());
+
+  // Listen for 401 events from the fetch wrapper (token expired mid-session)
+  useEffect(() => {
+    const handler = () => setIsAuthenticated(false);
+    window.addEventListener('motorq:unauthorized', handler);
+    return () => window.removeEventListener('motorq:unauthorized', handler);
+  }, []);
+
+  const handleLogout = () => {
+    clearToken();
+    setIsAuthenticated(false);
+  };
+
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <Router>
       <div className="app-container">
@@ -15,26 +36,26 @@ export default function App() {
             <Car size={28} />
             Motorq Fleet
           </div>
-          
+
           <nav className="nav-links">
-            <NavLink 
-              to="/overview" 
+            <NavLink
+              to="/overview"
               className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
             >
               <LayoutDashboard size={20} />
               Fleet Overview
             </NavLink>
-            
-            <NavLink 
-              to="/leaderboard" 
+
+            <NavLink
+              to="/leaderboard"
               className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
             >
               <Activity size={20} />
               Worst Offenders
             </NavLink>
-            
-            <NavLink 
-              to="/ai-assistant" 
+
+            <NavLink
+              to="/ai-assistant"
               className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
             >
               <Sparkles size={20} />
@@ -42,16 +63,34 @@ export default function App() {
             </NavLink>
           </nav>
 
-          <div style={{ marginTop: 'auto', padding: '16px', color: 'var(--text-secondary)', fontSize: '12px' }}>
-            <div className="flex-between" style={{ marginBottom: 12 }}>
-              <Settings size={16} />
-              Settings
+          <div style={{ marginTop: 'auto', padding: '16px' }}>
+            <button
+              onClick={handleLogout}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                width: '100%',
+                background: 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                color: 'var(--text-secondary)',
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                marginBottom: '12px',
+              }}
+            >
+              <LogOut size={15} />
+              Sign Out
+            </button>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
+              Hackathon Build v1.0
             </div>
-            Hackathon Build v1.0
           </div>
         </aside>
 
-        {/* Main Content Area */}
+        {/* Main Content */}
         <main className="main-content">
           <Routes>
             <Route path="/" element={<Navigate to="/overview" replace />} />

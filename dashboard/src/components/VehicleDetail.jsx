@@ -166,11 +166,11 @@ export default function VehicleDetail() {
 
       <div className="kpi-grid">
         <div className="glass-panel">
-          <div className="kpi-label">30-Day Idle Cost</div>
+          <div className="kpi-label">Weekly Idle Cost</div>
           <div className="kpi-value text-danger">{formatINR(totalIdleCost)}</div>
         </div>
         <div className="glass-panel">
-          <div className="kpi-label">30-Day Fuel Cost</div>
+          <div className="kpi-label">Weekly Fuel Cost</div>
           <div className="kpi-value">{formatINR(totalFuelCost)}</div>
         </div>
         <div className="glass-panel">

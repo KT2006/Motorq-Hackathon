@@ -15,7 +15,7 @@ Two output modes:
 Dependencies:  pip install pandas numpy faker kafka-python psycopg2-binary
 
 Usage:
-  # 100K vehicles x 1 day — uses all CPU cores automatically
+  # 100K vehicles x 1 day — uses up to 8 workers automatically
   python data_simulator.py --mode bulk --vehicles 100000 --days 1
 
   # Demo scale (fast)
@@ -25,9 +25,10 @@ Usage:
   python data_simulator.py --mode stream --vehicles 5000 --rate 2000 --topic telemetry
 
 Scaling note:
-  Each worker process connects independently to Postgres and flushes its
-  vehicle slice in batches of 50K events. On an 8-core machine, 100K
-  vehicles x 1 day (~15M events) completes in roughly 10-20 minutes.
+  Each worker connects independently to Postgres and flushes its vehicle
+  slice in batches of 50K events. At the current one-minute trip cadence,
+  100K vehicles x 1 day generates roughly 14M events; runtime and storage
+  depend on the host.
 """
 
 import argparse
@@ -69,12 +70,16 @@ VEHICLE_MAKES = ["Volvo", "Subaru", "Toyota", "Mahindra", "Tata", "Hyundai", "Fo
 
 CITY_LAT_RANGE = (12.90, 13.20)
 CITY_LON_RANGE = (80.10, 80.30)
+SAMPLE_INTERVAL_SECONDS = 60
 
 IDLE_BURN_RATE = {
     "petrol": 0.6, "diesel": 0.5, "hybrid": 0.3, "ev": 0.9,
 }
 CONSUMPTION_PER_KM = {
-    "petrol": 0.09, "diesel": 0.07, "hybrid": 0.05, "ev": 0.18,
+    "petrol": 1 / 12.0,
+    "diesel": 1 / 15.0,
+    "hybrid": 1 / 18.0,
+    "ev": 1 / 5.5,
 }
 
 # ---------------------------------------------------------------------------
@@ -159,6 +164,8 @@ def simulate_vehicle_day(
     day: datetime,
     start_odo: float,
     start_fuel_pct: float,
+    tank_capacity_l: float = 50.0,
+    battery_capacity_kwh: float = 60.0,
 ):
     """
     State machine per vehicle per day:
@@ -183,25 +190,39 @@ def simulate_vehicle_day(
         dest = random_point()
         trip_dist_km = haversine_km(*origin, *dest) * random.uniform(1.1, 1.4)
         avg_speed = random.uniform(18, 45)
-        duration_min = max(5, (trip_dist_km / avg_speed) * 60)
-        n_steps = max(1, int(duration_min * 60 / 8))
+        duration_seconds = max(300, trip_dist_km / avg_speed * 3600)
+        n_steps = max(1, round(duration_seconds / SAMPLE_INTERVAL_SECONDS))
+        sample_seconds = duration_seconds / n_steps
 
         events.append(
             _event(vin, t, *origin, 0, odo, True, fuel_type, fuel_pct, "TRIP_START", seq)
         )
         seq += 1
 
+        raw_speeds = [
+            0.0 if random.random() < 0.08 else max(5.0, random.gauss(avg_speed, 8))
+            for _ in range(n_steps)
+        ]
+        if not any(raw_speeds):
+            raw_speeds[0] = avg_speed
+        moving_distance = sum(raw_speeds) * sample_seconds / 3600
+        speed_scale = trip_dist_km / moving_distance
+        speeds = [speed * speed_scale for speed in raw_speeds]
+        travelled_km = 0.0
+
         for i in range(1, n_steps + 1):
-            frac = i / n_steps
+            speed = speeds[i - 1]
+            step_km = speed * sample_seconds / 3600
+            travelled_km += step_km
+            frac = travelled_km / trip_dist_km
             lat = origin[0] + (dest[0] - origin[0]) * frac + random.gauss(0, 0.0004)
             lon = origin[1] + (dest[1] - origin[1]) * frac + random.gauss(0, 0.0004)
-            is_red_light = random.random() < 0.08
-            speed = 0.0 if is_red_light else max(5, random.gauss(avg_speed, 8))
-            step_km = 0 if is_red_light else (trip_dist_km / n_steps)
             odo += step_km
-            fuel_pct -= _consumption_delta(fuel_type, step_km)
-            t += timedelta(seconds=8)
-            evt = "HARSH_BRAKE" if (not is_red_light and random.random() < 0.01) else None
+            fuel_pct -= _consumption_delta(
+                fuel_type, step_km, tank_capacity_l, battery_capacity_kwh
+            )
+            t += timedelta(seconds=sample_seconds)
+            evt = "HARSH_BRAKE" if speed > 0 and random.random() < 0.01 else None
             events.append(
                 _event(vin, t, lat, lon, speed, odo, True, fuel_type, fuel_pct, evt, seq)
             )
@@ -218,7 +239,9 @@ def simulate_vehicle_day(
                 _event(vin, t, *dest, 0, odo, True, fuel_type, fuel_pct, "IDLE_START", seq)
             )
             seq += 1
-            fuel_pct -= _idle_burn_delta(fuel_type, idle_min)
+            fuel_pct -= _idle_burn_delta(
+                fuel_type, idle_min, tank_capacity_l, battery_capacity_kwh
+            )
             t += timedelta(minutes=idle_min)
             events.append(
                 _event(vin, t, *dest, 0, odo, True, fuel_type, fuel_pct, "IDLE_END", seq)
@@ -230,13 +253,24 @@ def simulate_vehicle_day(
     return events, odo, max(fuel_pct, 5.0)
 
 
-def _consumption_delta(fuel_type: str, km: float) -> float:
-    base = CONSUMPTION_PER_KM.get(fuel_type, 0.09) * km
-    return base / 0.6 if fuel_type != "ev" else base * 1.3
+def _consumption_delta(
+    fuel_type: str,
+    km: float,
+    tank_capacity_l: float = 50.0,
+    battery_capacity_kwh: float = 60.0,
+) -> float:
+    capacity = battery_capacity_kwh if fuel_type == "ev" else tank_capacity_l
+    return CONSUMPTION_PER_KM[fuel_type] * km / capacity * 100
 
 
-def _idle_burn_delta(fuel_type: str, minutes: float) -> float:
-    return IDLE_BURN_RATE.get(fuel_type, 0.6) * (minutes / 60) * 1.5
+def _idle_burn_delta(
+    fuel_type: str,
+    minutes: float,
+    tank_capacity_l: float = 50.0,
+    battery_capacity_kwh: float = 60.0,
+) -> float:
+    capacity = battery_capacity_kwh if fuel_type == "ev" else tank_capacity_l
+    return IDLE_BURN_RATE[fuel_type] * (minutes / 60) / capacity * 100
 
 
 def _event(vin, ts, lat, lon, speed, odo, ignition, fuel_type, fuel_pct, evt, seq):
@@ -292,7 +326,10 @@ def get_pg_engine():
             "  POSTGRES_URL=postgresql://user:password@host:5432/dbname"
         )
     from sqlalchemy import create_engine, event as sa_event
-    url = POSTGRES_URL.replace("postgres://", "postgresql://")
+    # Explicitly use psycopg2 driver to avoid SQLAlchemy 2.x defaulting to psycopg3
+    url = POSTGRES_URL.replace("postgres://", "postgresql+psycopg2://").replace(
+        "postgresql://", "postgresql+psycopg2://"
+    )
     engine = create_engine(url, pool_pre_ping=True)
 
     @sa_event.listens_for(engine, "connect")
@@ -392,16 +429,19 @@ def _insert_telemetry_batch(pg_url: str, events: list):
              fuel_level_pct, soc_pct, evt, seq)
         VALUES %s
         ON CONFLICT (vin, ts, seq) DO NOTHING
+        RETURNING 1
     """
     url = pg_url.replace("postgres://", "postgresql://")
     conn = psycopg2.connect(url)
     try:
         with conn.cursor() as cur:
-            psycopg2.extras.execute_values(cur, sql, rows, page_size=2000)
+            inserted_rows = psycopg2.extras.execute_values(
+                cur, sql, rows, page_size=2000, fetch=True
+            )
         conn.commit()
     finally:
         conn.close()
-    return len(rows)
+    return len(inserted_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -431,10 +471,15 @@ def _worker(args):
         odo = float(odo_baseline)
         fuel_pct = random.uniform(40, 95)
 
+        tank_capacity_l = v.get("tank_capacity_l") or 50.0
+        battery_capacity_kwh = v.get("battery_capacity_kwh") or 60.0
         for d in range(n_days):
             day = start_day + timedelta(days=d)
+            # Model a refuel/recharge between scheduled daily shifts.
+            fuel_pct = random.uniform(75, 95)
             day_events, odo, fuel_pct = simulate_vehicle_day(
-                vin, fuel_type, day, odo, fuel_pct
+                vin, fuel_type, day, odo, fuel_pct,
+                tank_capacity_l, battery_capacity_kwh,
             )
             batch.extend(inject_noise(day_events))
 
@@ -460,34 +505,69 @@ def run_bulk(
     out_dir: str,
     n_workers: int = None,
     flush_every: int = 50_000,
+    skip_master: bool = False,
 ):
+    """
+    skip_master=True: don't generate/upsert fleets+vehicles — read existing VINs
+    from the DB instead. Used when called from seed_and_run.py which already
+    seeded master data.
+    """
     if n_workers is None:
         n_workers = min(multiprocessing.cpu_count(), 8)
 
-    engine = get_pg_engine()
-    print(f"Connected to Postgres: {engine.url.host}")
-    print(f"Generating master data for {n_vehicles:,} vehicles ({n_workers} workers)...")
+    pg_url = POSTGRES_URL.replace("postgres://", "postgresql+psycopg2://").replace(
+        "postgresql://", "postgresql+psycopg2://"
+    ).replace("postgresql+psycopg2+psycopg2://", "postgresql+psycopg2://")
 
-    n_fleets = max(3, n_vehicles // 200)
-    fleets = gen_fleets(n_fleets)
-    vehicles = gen_vehicles(n_vehicles, fleets)
+    if skip_master:
+        # Read existing vehicles from the DB (seeder already inserted them)
+        import psycopg2
+        conn = psycopg2.connect(pg_url.replace("postgresql+psycopg2://", "postgresql://"))
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT vin, fuel_type, odometer_km_baseline, "
+                "tank_capacity_l, battery_capacity_kwh "
+                "FROM vehicles ORDER BY vin LIMIT %s",
+                (n_vehicles,),
+            )
+            rows = cur.fetchall()
+        conn.close()
+        vehicle_records = [
+            {
+                "vin": r[0],
+                "fuel_type": r[1],
+                "odometer_km_baseline": float(r[2]),
+                "tank_capacity_l": float(r[3]) if r[3] is not None else None,
+                "battery_capacity_kwh": float(r[4]) if r[4] is not None else None,
+            }
+            for r in rows
+        ]
+        print(f"Loaded {len(vehicle_records):,} existing vehicles from DB for telemetry generation.")
+    else:
+        engine = get_pg_engine()
+        print(f"Connected to Postgres: {engine.url.host}")
+        print(f"Generating master data for {n_vehicles:,} vehicles ({n_workers} workers)...")
 
-    _upsert_fleets(engine, fleets)
-    _upsert_vehicles(engine, vehicles)
-    engine.dispose()  # close connections before forking
+        n_fleets = max(3, n_vehicles // 200)
+        fleets = gen_fleets(n_fleets)
+        vehicles = gen_vehicles(n_vehicles, fleets)
 
-    print(f"\nStarting telemetry generation: {n_vehicles:,} vehicles × {n_days} day(s)...")
+        _upsert_fleets(engine, fleets)
+        _upsert_vehicles(engine, vehicles)
+        engine.dispose()
+
+        vehicle_records = vehicles[
+            ["vin", "fuel_type", "odometer_km_baseline", "tank_capacity_l", "battery_capacity_kwh"]
+        ].to_dict(
+            orient="records"
+        )
+
+    print(f"\nStarting telemetry generation: {len(vehicle_records):,} vehicles × {n_days} day(s)...")
     print(f"Using {n_workers} CPU cores — this is embarrassingly parallel.\n")
 
-    # Slice vehicles evenly across workers
-    vehicle_records = vehicles[["vin", "fuel_type", "odometer_km_baseline"]].to_dict(
-        orient="records"
-    )
     slices = [vehicle_records[i::n_workers] for i in range(n_workers)]
-
-    pg_url = POSTGRES_URL.replace("postgres://", "postgresql://")
     worker_args = [
-        (i, slices[i], n_days, pg_url, flush_every)
+        (i, slices[i], n_days, pg_url.replace("postgresql+psycopg2://", "postgresql://"), flush_every)
         for i in range(n_workers)
     ]
 
@@ -564,11 +644,13 @@ def main():
     p.add_argument("--vehicles", type=int, default=1000,
                    help="Number of vehicles to simulate")
     p.add_argument("--days", type=int, default=1,
-                   help="Days of history (bulk mode). 1 day ≈ 150 events/vehicle.")
+                   help="Days of history (bulk mode). 1 day ≈ 140 events/vehicle.")
     p.add_argument("--out", type=str, default="./seed_data",
                    help="Output directory (unused, kept for backwards compat)")
     p.add_argument("--workers", type=int, default=None,
                    help="CPU workers for bulk mode (default: all cores)")
+    p.add_argument("--skip-master", action="store_true",
+                   help="Skip fleet/vehicle upsert — read existing VINs from DB instead")
     p.add_argument("--rate", type=int, default=500,
                    help="Target events/sec (stream mode)")
     p.add_argument("--topic", type=str, default="telemetry",
@@ -578,7 +660,8 @@ def main():
     args = p.parse_args()
 
     if args.mode == "bulk":
-        run_bulk(args.vehicles, args.days, args.out, n_workers=args.workers)
+        run_bulk(args.vehicles, args.days, args.out,
+                 n_workers=args.workers, skip_master=args.skip_master)
     else:
         run_stream(args.vehicles, args.rate, args.topic, args.bootstrap)
 

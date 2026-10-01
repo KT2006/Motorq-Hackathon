@@ -25,8 +25,8 @@ export default function Overview() {
   const idleCost = Number(data.total_idle_cost) || 0;
   const totalCost = fuelCost + idleCost;
   const idlePct = totalCost > 0 ? ((idleCost / totalCost) * 100).toFixed(1) : '0.0';
-  const monthLabel = data.month
-    ? new Date(`${data.month}T00:00:00`).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
+  const periodLabel = data.from_date && data.to_date
+    ? `${new Date(`${data.from_date}T00:00:00`).toLocaleDateString()} – ${new Date(`${data.to_date}T00:00:00`).toLocaleDateString()}`
     : 'selected month';
 
   const chartData = [
@@ -46,7 +46,7 @@ export default function Overview() {
       <div className="kpi-grid">
         <div className="glass-panel">
           <div className="flex-between text-muted">
-            <span className="kpi-label">Idle Cost ({monthLabel})</span>
+            <span className="kpi-label">Idle Cost ({periodLabel})</span>
             <AlertTriangle size={20} className="text-danger" />
           </div>
           <div className="kpi-value kpi-danger">

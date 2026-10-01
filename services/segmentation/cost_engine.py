@@ -493,7 +493,7 @@ def main():
     print("=" * 60)
 
     conn = get_connection()
-    print("Connected to Supabase/Postgres")
+    print("Connected to PostgreSQL")
 
     # Seed reference data if needed
     seed_idle_burn_rates(conn)

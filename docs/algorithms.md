@@ -131,7 +131,10 @@ All thresholds are defined in [`config.py`](../services/segmentation/config.py) 
 | **Total time** | **O(N)** | Where N = total telemetry events across all vehicles. Each vehicle is independent — embarrassingly parallel if needed. |
 | **Database I/O** | **O(N/B)** | B = batch size (500). We use `psycopg2.extras.execute_values` for bulk inserts, not row-by-row. |
 
-For the hackathon seed data (~100K events), this completes in seconds. For production scale (100K vehicles × 30 days), shard across a process pool — each worker handles a slice of VINs independently.
+For the local weekly profile, the simulator writes roughly one million
+telemetry rows and segmentation completes during startup on the development
+device. A 100K-vehicle × 30-day run is not benchmarked; that workload would
+require measured batching and parallelism on suitable hardware.
 
 ---
 
@@ -151,8 +154,12 @@ This delete-then-insert approach is simpler to reason about than `ON CONFLICT` u
 ## 6. Derived Field Calculations
 
 ### Fuel/Energy Used (per trip)
-- **ICE**: `fuel_used_l = (fuel_start_pct - fuel_end_pct) / 100 × 50 L` (reference tank capacity)
-- **EV**: `energy_used_kwh = (soc_start - soc_end) / 100 × 60 kWh` (reference battery capacity)
+- **ICE**: `fuel_used_l = (fuel_start_pct - fuel_end_pct) / 100 × vehicle tank capacity`
+- **EV**: `energy_used_kwh = (soc_start - soc_end) / 100 × vehicle battery capacity`
+
+The seeder reads capacities from `vehicles` and passes them to segmentation.
+The 50 L / 60 kWh defaults remain for callers without a vehicle-specific
+capacity.
 
 ### Idle Fuel/Energy Burned (per idle event)
 - Calculated from burn rate × duration: `IDLE_BURN_RATE[fuel_type] × hours`
@@ -217,7 +224,7 @@ The rollup uses a single SQL query with CTEs (`trip_daily`, `idle_daily`, `combi
 
 ### Complexity
 - **Time**: O(T + I) where T = trip rows, I = idle rows — single pass via SQL aggregation
-- **I/O**: Single query + single batch upsert — up to 700 daily rows for the default 50 vehicles × 14 days
+- **I/O**: Single query + batch upsert — up to 7,000 daily rows for the default 1,000-vehicle × 7-day profile
 
 ### 9.1 INR Price and Idle Burn Assumptions
 

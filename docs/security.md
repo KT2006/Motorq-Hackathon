@@ -1,39 +1,50 @@
-# Security & Compliance
+# Security and Data Lifecycle
 
-## API Security & OWASP Considerations
+This is a local hackathon demo, not a production security posture. The controls
+below describe implemented behavior and known gaps; they are not a compliance
+certification.
 
-Our API security model is built around OWASP API Top 10 recommendations:
+## Implemented controls
 
-- **Authentication & Secret Management**: All API endpoints (except `/token`) require a valid JWT passed in the `Authorization: Bearer <token>` header. JWT authentication uses environment-configured secrets with NO hardcoded defaults. Secrets are managed strictly via environment variables, and the `.env.example` file contains placeholders only.
-- **Tenant Isolation**: Fleet/tenant isolation is enforced via a JWT `fleet_id` claim, preventing cross-tenant data access (BOLA/IDOR protection).
-- **Rate Limiting**: Implemented via SlowAPI to prevent DoS and abuse. Core analytical endpoints are limited to `100/minute`; the `/chat` AI endpoint is limited to `20/minute`.
-- **Encryption in Transit**: Supabase connections enforce TLS by default. Local Docker networking uses plaintext. TLS is highly recommended for all production deployments.
-- **CORS**: Currently set to `allow_origins=["*"]` for the hackathon demo. In production, CORS must be restricted to known origins (e.g., the specific dashboard domain).
-- **Input Validation**: Strict input validation is enforced via Pydantic models on all API requests and message queue consumers. Malformed events are routed to a dead-letter queue (DLQ) for inspection rather than crashing the consumer or polluting the database.
-- **Audit Logging**: Comprehensive audit logging is maintained for sensitive data access and AI queries. Every query to the M9 AI agent is recorded in `agent_logs` with exact tool calls and answers, ensuring traceability and accountability.
+| Area | Current behavior | Limitation |
+|---|---|---|
+| Authentication | Protected API routes require a JWT; `/token` issues demo tokens. | Compose supplies a known local fallback user/password and signing key so judges need no secrets file. Never expose these defaults publicly. |
+| Tenant scope | JWT contains a fleet claim; API queries apply the fleet filter for non-admin users. | Expand endpoint-level negative authorization tests before deployment. |
+| Request limits | SlowAPI rate limits are configured on API routes. | No sustained overload or distributed-rate-limit validation. |
+| Input validation | Pydantic validates incoming telemetry; malformed JSON/schema records are sent to a dead-letter topic. | Broker authentication and schema-registry governance are not configured. |
+| CORS | API uses an explicit `CORS_ORIGINS` allowlist; Compose supplies local development origins. | Recheck values in any deployed environment. |
+| Audit records | Selected sensitive reads and chat requests write to `audit_log`; AI exchanges also use `agent_logs`. | Auditing is not comprehensive. Audit-write failures are logged and do not fail the request. |
 
-## STRIDE Threat Model — Ingestion Path & Public API
+## STRIDE snapshot
 
-| # | STRIDE Category | Threat | Affected Component | Control |
-|---|---|---|---|---|
-| 1 | **Spoofing** | Attacker sends telemetry events with a spoofed VIN, injecting false data into `telemetry_events` | Redpanda ingestion topic | Authenticate producers at the broker level; VIN format validation in the consumer's Pydantic schema rejects malformed payloads to DLQ. |
-| 2 | **Tampering** | Man-in-the-middle modifies in-flight telemetry events | Network layer (producer → broker) | Enforce mTLS between producers and Redpanda; idempotency key `(vin, ts, seq)` prevents replay attacks. |
-| 3 | **Repudiation** | Fleet manager denies asking the AI agent a question that triggered a cost recommendation | AI agent (`/chat` endpoint) | Every agent request, tool call, and final answer is persisted in `agent_logs` with timestamp — provides a full audit trail. |
-| 4 | **Information Disclosure** | Unauthenticated caller reads fleet cost data or vehicle positions | FastAPI public API | All endpoints require a valid JWT with `fleet_id` claim; JWT uses HS256 with a secret stored only in env vars. |
-| 5 | **Denial of Service** | Attacker floods expensive aggregation queries to exhaust DB connections | FastAPI → PostgreSQL | Rate limiter (100 req/min per IP) returns 429 before the query runs. |
+| Threat | Current mitigation | Remaining work |
+|---|---|---|
+| Spoofed telemetry producer | Event schema validation and VIN format checks | Authenticate producers at the broker; a valid-looking VIN is not proof of ownership. |
+| Event tampering in transit | Event identity key `(vin, ts, seq)` makes database writes idempotent | Configure TLS/mTLS; idempotency does not prevent a malicious actor from fabricating valid events. |
+| Repudiation of AI requests | Selected requests and answers are stored in application logs | Make audit writes durable, complete, and failure-aware; verify retention/access controls. |
+| Unauthorized data access | JWT auth and fleet filters | Add broad cross-tenant negative tests and production identity/RBAC controls. |
+| API/resource exhaustion | Per-route rate limits and PgBouncer | Test 3× burst, connection exhaustion, and recovery behavior. |
 
-*Elevation of Privilege (E) is not the primary concern in a read-heavy analytics API with no write surface exposed to users; the agent's tools are read-only by design.*
+## Image scan
 
-## Container Security (Trivy)
+`docs/trivy_scan_api.txt` is a saved scan of an earlier API image. It reported
+44 HIGH, 53 MEDIUM, and 0 CRITICAL OS-package findings. It is not a scan of the
+latest rebuilt image. Rescan current pinned images and address or formally
+accept findings before any deployment.
 
-A Trivy scan of the API image is committed to `docs/trivy_scan_api.txt`.
-The scan reports findings in base OS packages (`python:3.12-slim`). No critical findings. These are acknowledged as technical debt. A production release would:
-1. Pin to a hardened base image (e.g., `cgr.dev/chainguard/python:latest`)
-2. Run Trivy as a CI gate blocking merges with CRITICAL findings
-3. Subscribe to base image update notifications
+## Transport, storage, and retention
 
-## Data Lifecycle & Retention
+- The local dashboard/API and container network use plaintext HTTP.
+- Postgres, Redis, and Redpanda use temporary filesystems in local Compose;
+  `docker compose down -v` removes the stack and associated anonymous volumes.
+- The demo does not implement a verified hot/warm/cold retention policy,
+  location masking, or GDPR/DPDP right-to-erasure workflow.
+- The local demo uses synthetic data only. Do not load real personal or vehicle
+  owner data.
 
-- Telemetry events are append-only with an `ON CONFLICT DO NOTHING` idempotency guarantee.
-- Assumed hot retention policy: 90 days of raw `telemetry_events`. Older data would be archived to cold storage.
-- GPS coordinates are retained at full precision for 90 days, then aggregated to trip-level origin/destination only.
+## Production readiness
+
+Before internet exposure, replace all demo credentials and signing keys with
+managed secrets, terminate TLS, enable broker authentication, configure
+least-privilege identities and complete tenant authorization tests, make
+auditing durable, and verify retention/erasure and recovery procedures.

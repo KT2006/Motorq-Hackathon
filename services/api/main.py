@@ -254,43 +254,63 @@ def vehicle_cost_summary(
 def fleet_summary(
     request: Request,
     month: Optional[date] = Query(None, description="First day of a month, e.g., 2026-08-01. Defaults to the latest month with data."),
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
     fleet_id: Optional[str] = None,
     user: dict = Depends(verify_token)
 ):
-    """Headline cost numbers using the materialized view monthly_fleet_cost."""
+    """Fleet cost summary for a month or date range (latest seven data days by default)."""
     fleet_id_filter = get_fleet_filter(user)
 
-    if month is None:
-        month_query = "SELECT MAX(month) AS latest_month FROM monthly_fleet_cost"
-        month_params = []
-        if fleet_id_filter:
-            month_query += " WHERE fleet_id = %s"
-            month_params.append(fleet_id_filter)
-        elif fleet_id:
-            month_query += " WHERE fleet_id = %s"
-            month_params.append(fleet_id)
+    if (from_date is None) != (to_date is None):
+        raise HTTPException(status_code=422, detail="from_date and to_date must be provided together")
+    if month is not None and from_date is not None:
+        raise HTTPException(status_code=422, detail="month cannot be combined with from_date or to_date")
+    if from_date is not None and from_date > to_date:
+        raise HTTPException(status_code=422, detail="from_date must be on or before to_date")
 
+    if month is not None:
+        from calendar import monthrange
+        period_start = month.replace(day=1)
+        period_end = month.replace(day=monthrange(month.year, month.month)[1])
+    elif from_date is not None:
+        period_start, period_end = from_date, to_date
+    else:
+        latest_query = """
+            SELECT MAX(cs.summary_date) AS latest_date
+            FROM cost_summary_daily cs
+            JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
+        """
+        latest_params = []
+        if fleet_id_filter:
+            latest_query += " WHERE v.fleet_id = %s"
+            latest_params.append(fleet_id_filter)
+        elif fleet_id:
+            latest_query += " WHERE v.fleet_id = %s"
+            latest_params.append(fleet_id)
         with get_db() as cur:
-            cur.execute(month_query, month_params)
-            latest = cur.fetchone()["latest_month"]
-        month = latest or date.today().replace(day=1)
+            cur.execute(latest_query, tuple(latest_params))
+            latest_date = cur.fetchone()["latest_date"]
+        period_end = latest_date or date.today()
+        period_start = period_end - timedelta(days=6)
     
     query = """
-        SELECT SUM(total_fuel_cost) as total_fuel_cost,
-               SUM(total_idle_cost) as total_idle_cost,
-               AVG(avg_utilisation_pct) as avg_utilisation_pct,
-               SUM(total_idle_min) as total_idle_min,
-               SUM(vehicle_count) as total_vehicles
-        FROM monthly_fleet_cost
-        WHERE month = %s
+        SELECT COALESCE(SUM(cs.fuel_cost), 0) AS total_fuel_cost,
+               COALESCE(SUM(cs.idle_cost), 0) AS total_idle_cost,
+               COALESCE(AVG(cs.utilisation_pct), 0) AS avg_utilisation_pct,
+               COALESCE(SUM(cs.total_idle_min), 0) AS total_idle_min,
+               COUNT(DISTINCT cs.vehicle_id) AS total_vehicles
+        FROM cost_summary_daily cs
+        JOIN vehicles v ON v.vehicle_id = cs.vehicle_id
+        WHERE cs.summary_date BETWEEN %s AND %s
     """
-    params = [month]
+    params = [period_start, period_end]
     
     if fleet_id_filter:
-        query += " AND fleet_id = %s"
+        query += " AND v.fleet_id = %s"
         params.append(fleet_id_filter)
     elif fleet_id:
-        query += " AND fleet_id = %s"
+        query += " AND v.fleet_id = %s"
         params.append(fleet_id)
         
     with get_db() as cur:
@@ -298,7 +318,9 @@ def fleet_summary(
         row = cur.fetchone()
         
     return {
-        "month": month.isoformat(),
+        "month": month.replace(day=1).isoformat() if month else None,
+        "from_date": period_start.isoformat(),
+        "to_date": period_end.isoformat(),
         "currency": "INR",
         "total_fuel_cost": float(row["total_fuel_cost"] or 0),
         "total_idle_cost": float(row["total_idle_cost"] or 0),
@@ -313,7 +335,8 @@ def top_offenders(
     request: Request,
     from_date: date,
     to_date: date,
-    limit: int = Query(10, le=100),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     user: dict = Depends(verify_token)
 ):
     """
@@ -361,16 +384,27 @@ def top_offenders(
                ) AS weighted_score
         FROM vehicle_agg
     )
-    SELECT * FROM scored
-    ORDER BY weighted_score DESC
-    LIMIT %s
+    SELECT scored.*, COUNT(*) OVER() AS total_count
+    FROM scored
+    ORDER BY weighted_score DESC, vehicle_id
+    LIMIT %s OFFSET %s
     """
     params.append(limit)
+    params.append(offset)
     with get_db() as cur:
         cur.execute(query, tuple(params))
         rows = cur.fetchall()
-        
-    return {"data": rows, "limit": limit, "currency": "INR"}
+    total_count = int(rows[0]["total_count"]) if rows else 0
+    for row in rows:
+        row.pop("total_count", None)
+    return {
+        "data": rows,
+        "limit": limit,
+        "offset": offset,
+        "total_count": total_count,
+        "has_more": offset + len(rows) < total_count,
+        "currency": "INR",
+    }
 
 import redis
 

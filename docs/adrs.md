@@ -7,7 +7,7 @@
 **Context:** Need to store telemetry events (100K+/sec target), trips, idle events, cost summaries. Need time-series queries, standard SQL joins for cost rollup, and ACID guarantees.  
 **Decision:** PostgreSQL with TimescaleDB hypertable for telemetry_events. Standard relational tables for master data and aggregates.  
 **Alternatives Considered:** InfluxDB (no SQL joins), Apache Druid (complex ops), ClickHouse (no ACID), DynamoDB (expensive at scale).  
-**Consequences:** Excellent query flexibility, familiar SQL. TimescaleDB compression for storage. Single-node may limit write throughput past ~50K events/sec; horizontal partitioning or read replicas needed at true production scale.
+**Consequences:** Flexible SQL joins and familiar operations. The local demo uses a single node; its write ceiling has not been established. The measured short streaming test is documented in `scale-benchmark.md` and is well below the challenge target. Production capacity, compression policy, partitioning, and replicas require workload-specific validation.
 
 ## ADR-2: Redpanda for event streaming over Apache Kafka
 

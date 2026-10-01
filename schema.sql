@@ -1,6 +1,6 @@
 -- ============================================================
 -- FUEL, IDLING & UTILISATION COST
--- Supabase PostgreSQL 17
+-- PostgreSQL with TimescaleDB (local Compose demo)
 -- TimescaleDB-enabled for time-series telemetry
 -- ============================================================
 

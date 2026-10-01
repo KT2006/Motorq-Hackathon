@@ -6,19 +6,37 @@ import { formatINR } from '../formatters';
 
 export default function Leaderboard() {
   const [data, setData] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState('');
   const [sortConfig, setSortConfig] = useState({ key: 'weighted_score', direction: 'desc' });
   const navigate = useNavigate();
 
   useEffect(() => {
-    getTopOffenders(15).then(res => {
+    getTopOffenders(25).then(res => {
       setData(res.data);
-      setLoading(false);
+      setTotalCount(res.total_count);
     }).catch(err => {
       console.error(err);
-      setLoading(false);
-    });
+      setError(err.message || 'Unable to load fleet offenders.');
+    }).finally(() => setLoading(false));
   }, []);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    setError('');
+    try {
+      const result = await getTopOffenders(25, undefined, undefined, data.length);
+      setData(current => [...current, ...result.data]);
+      setTotalCount(result.total_count);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || 'Unable to load more fleet offenders.');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleSort = (key) => {
     let direction = 'desc';
@@ -50,9 +68,11 @@ export default function Leaderboard() {
       <div className="flex-between mb-8">
         <div>
           <h1>Worst Offenders</h1>
-          <p className="subtitle">Top vehicles ranked by weighted idle waste score</p>
+          <p className="subtitle">Showing {data.length} of {totalCount} vehicles ranked by weighted idle waste score over the latest week</p>
         </div>
       </div>
+
+      {error && <p role="alert" className="text-danger">{error}</p>}
 
       <div className="glass-panel">
         <div className="table-container">
@@ -96,6 +116,25 @@ export default function Leaderboard() {
             </tbody>
           </table>
         </div>
+        {data.length < totalCount && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '20px' }}>
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={loadingMore}
+              style={{
+                background: 'var(--accent)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '10px 20px',
+                cursor: loadingMore ? 'wait' : 'pointer',
+              }}
+            >
+              {loadingMore ? 'Loading…' : `Load more (${totalCount - data.length} remaining)`}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

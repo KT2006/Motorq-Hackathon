@@ -1,7 +1,7 @@
 """
 M4: Trip & Idle Segmentation Engine
 =====================================
-Core module that reads raw telemetry_events from Supabase and produces
+Core module that reads raw telemetry_events from PostgreSQL and produces
 meaningful `trips` and `idle_events` rows.
 
 Algorithm: single-pass O(n) state-machine walk per vehicle.
@@ -116,7 +116,13 @@ def _new_idle(vin: str, row: dict, idle_type: str, trip_id: Optional[str] = None
 # Core segmentation — the O(n) state-machine walk
 # ---------------------------------------------------------------------------
 
-def segment_vehicle(rows: list[dict], vin: str, fuel_type: str) -> tuple[list[dict], list[dict]]:
+def segment_vehicle(
+    rows: list[dict],
+    vin: str,
+    fuel_type: str,
+    tank_capacity_l: float = 50.0,
+    battery_capacity_kwh: float = 60.0,
+) -> tuple[list[dict], list[dict]]:
     """
     Walk through telemetry rows (already sorted by ts ASC) for one vehicle
     and produce (trips, idle_events).
@@ -204,7 +210,7 @@ def segment_vehicle(rows: list[dict], vin: str, fuel_type: str) -> tuple[list[di
 
             if evt == "TRIP_END" or not ignition:
                 # ── Close the trip
-                _close_trip(current_trip, row, fuel_type)
+                _close_trip(current_trip, row, fuel_type, tank_capacity_l, battery_capacity_kwh)
                 if _trip_is_valid(current_trip):
                     trips.append(current_trip)
                     # Also collect all its in-trip idles
@@ -234,7 +240,7 @@ def segment_vehicle(rows: list[dict], vin: str, fuel_type: str) -> tuple[list[di
                     current_trip["total_idle_sec"] += (current_idle["end_ts"] - current_idle["start_ts"]).total_seconds()
                 current_idle = None
 
-                _close_trip(current_trip, row, fuel_type)
+                _close_trip(current_trip, row, fuel_type, tank_capacity_l, battery_capacity_kwh)
                 if _trip_is_valid(current_trip):
                     trips.append(current_trip)
                     idles.extend(current_trip["idle_events"])
@@ -249,7 +255,7 @@ def segment_vehicle(rows: list[dict], vin: str, fuel_type: str) -> tuple[list[di
                     current_trip["total_idle_sec"] += (current_idle["end_ts"] - current_idle["start_ts"]).total_seconds()
                 current_idle = None
 
-                _close_trip(current_trip, row, fuel_type)
+                _close_trip(current_trip, row, fuel_type, tank_capacity_l, battery_capacity_kwh)
                 if _trip_is_valid(current_trip):
                     trips.append(current_trip)
                     idles.extend(current_trip["idle_events"])
@@ -280,7 +286,7 @@ def segment_vehicle(rows: list[dict], vin: str, fuel_type: str) -> tuple[list[di
             standalone_idles.append(current_idle)
 
     if current_trip is not None:
-        _close_trip(current_trip, rows[-1], fuel_type)
+        _close_trip(current_trip, rows[-1], fuel_type, tank_capacity_l, battery_capacity_kwh)
         if _trip_is_valid(current_trip):
             trips.append(current_trip)
             idles.extend(current_trip["idle_events"])
@@ -293,7 +299,13 @@ def segment_vehicle(rows: list[dict], vin: str, fuel_type: str) -> tuple[list[di
 # Helpers — close events, compute derived fields
 # ---------------------------------------------------------------------------
 
-def _close_trip(trip: dict, last_row: dict, fuel_type: str):
+def _close_trip(
+    trip: dict,
+    last_row: dict,
+    fuel_type: str,
+    tank_capacity_l: float = 50.0,
+    battery_capacity_kwh: float = 60.0,
+):
     """Finalize a trip with end coordinates, distance, duration, etc."""
     trip["end_ts"] = last_row["ts"]
     trip["end_lat"] = last_row["lat"]
@@ -315,19 +327,18 @@ def _close_trip(trip: dict, last_row: dict, fuel_type: str):
     else:
         trip["avg_speed_kmh"] = 0.0
 
-    # Fuel / energy used (from percentage delta × assumed tank/battery capacity)
-    # For v1 we don't have per-vehicle capacity readily available in the
-    # telemetry row, so we estimate from the percentage change × a reference
-    # capacity. This is approximate — good enough for the hackathon.
+    # Convert database NUMERIC capacities (Decimal) before arithmetic.
     if fuel_type == "ev":
         soc_delta = _safe_delta(trip["soc_start"], trip["soc_end"])
-        # Reference: 60 kWh battery pack
-        trip["energy_used_kwh"] = round(max(0.0, soc_delta / 100.0 * 60.0), 3) if soc_delta else None
+        trip["energy_used_kwh"] = round(
+            max(0.0, soc_delta / 100.0 * float(battery_capacity_kwh)), 3
+        ) if soc_delta else None
         trip["fuel_used_l"] = None
     else:
         fuel_delta = _safe_delta(trip["fuel_start"], trip["fuel_end"])
-        # Reference: 50 L tank
-        trip["fuel_used_l"] = round(max(0.0, fuel_delta / 100.0 * 50.0), 3) if fuel_delta else None
+        trip["fuel_used_l"] = round(
+            max(0.0, fuel_delta / 100.0 * float(tank_capacity_l)), 3
+        ) if fuel_delta else None
         trip["energy_used_kwh"] = None
 
     # Idle duration in minutes (summed from child idle events)
@@ -389,8 +400,7 @@ def _safe_delta(start_val, end_val) -> Optional[float]:
 
 def get_connection():
     """Get a raw psycopg2 connection from POSTGRES_URL.
-    Explicitly sets read-write mode since the Supabase pooler
-    can default to read-only transactions."""
+    Explicitly requests a read-write transaction for database compatibility."""
     if not POSTGRES_URL:
         raise RuntimeError(
             "POSTGRES_URL not set. Add it to your .env file:\n"
@@ -565,8 +575,7 @@ def _process_vehicle_standalone(vin: str, fuel_type: str, dry_run: bool) -> tupl
 
 
 # Number of concurrent workers (each gets its own DB connection).
-# 6 is a good balance — Supabase free tier allows ~20 connections,
-# and the bottleneck is network latency, not CPU.
+# Each worker uses its own database connection; keep concurrency bounded.
 MAX_WORKERS = 6
 
 
@@ -592,7 +601,7 @@ def main():
     if args.vin:
         # Single vehicle mode — sequential, one connection
         conn = get_connection()
-        print(f"Connected to Supabase/Postgres")
+        print("Connected to PostgreSQL")
 
         with conn.cursor() as cur:
             cur.execute("SELECT fuel_type FROM vehicles WHERE vin = %s", (args.vin,))
@@ -610,7 +619,7 @@ def main():
     else:
         # All vehicles — concurrent with ThreadPoolExecutor
         conn = get_connection()
-        print(f"Connected to Supabase/Postgres")
+        print("Connected to PostgreSQL")
         vin_list = fetch_distinct_vins(conn)
         conn.close()
         print(f"\nFound {len(vin_list)} vehicles with telemetry data")
@@ -641,7 +650,7 @@ def main():
     elapsed = time.time() - start_time
     print(f"\n{'=' * 60}")
     print(f"DONE in {elapsed:.1f}s: {total_trips:,} trips + {total_idles:,} idle events "
-          f"{'(dry run — nothing written)' if args.dry_run else 'written to Supabase'}")
+          f"{'(dry run — nothing written)' if args.dry_run else 'written to PostgreSQL'}")
     print(f"{'=' * 60}")
 
 

@@ -1,6 +1,7 @@
 # Architecture Diagrams
 
-> All diagrams are rendered as Mermaid. They are embedded in the Solution Document and in this file for reference.
+> These Mermaid diagrams describe the current local demo. Cloud diagrams and
+> scale figures should not be read as deployed or benchmarked production claims.
 
 ---
 
@@ -15,15 +16,13 @@ C4Context
 
     System(sys, "Fleet Intelligence Platform", "Ingests raw telemetry, computes cost, surfaces insight via dashboard and AI agent.")
 
-    System_Ext(telematics, "Vehicle Telematics Devices", "GPS + OBD-II dongles on every vehicle. Emit position, speed, fuel, ignition events.")
+    System_Ext(telematics, "Synthetic telemetry producer", "Generates route, fuel, speed, and ignition events for the local demo.")
     System_Ext(groq, "Groq LLM API", "Writes answers using compact, authoritative fleet context queried from PostgreSQL.")
-    System_Ext(supabase, "Supabase (optional)", "Managed Postgres hosting for production deployments.")
 
     Rel(telematics, sys, "Streams raw telemetry events", "Kafka/Redpanda")
     Rel(fm, sys, "Views dashboard, queries AI agent", "HTTPS / React")
     Rel(admin, sys, "Manages fleet data", "HTTPS / React")
     Rel(sys, groq, "Sends fleet context and user prompt", "HTTPS / REST")
-    Rel(sys, supabase, "Reads/writes structured data", "TLS / PostgreSQL wire")
 ```
 
 ---
@@ -31,30 +30,28 @@ C4Context
 ## 2. Data-Flow Pipeline Diagram
 
 ```mermaid
-flowchart TD
-    SIM["Simulator\ndata_simulator.py\n50 vehicles x 14 days"] -->|JSON events| RP["Redpanda\nTopic: telemetry\nat-least-once delivery"]
+flowchart LR
+    subgraph Startup["One-shot startup seed"]
+        SIM["Seeder + route simulator\n1,000 vehicles × 7 days\n(default)"] -->|bulk INSERT| PG[("Local TimescaleDB\ntelemetry + master data")]
+        PG --> SEG["M4 segmentation\nall balanced-profile vehicles"]
+        SEG --> TRIPS[("trips + idle_events")]
+        TRIPS --> COST["M5 daily cost rollup"]
+        COST --> DAILY[("cost_summary_daily\n7,000 rows in verified run")]
+    end
 
-    RP -->|poll batch 500 events| ING["Ingestion Consumer\nPydantic validation\nbatch INSERT ON CONFLICT DO NOTHING\nmanual offset commit after DB write"]
+    subgraph Stream["Live-event demo path"]
+        PRODUCER["Seeder publishes\n60 sample events"] --> RP["Redpanda\ntelemetry topic"]
+        RP --> ING["Ingestion consumer\nvalidate + deduplicate"]
+        ING --> PG
+        ING --> RD[("Redis\nlive status cache")]
+    end
 
-    ING -->|idempotent write| PG[("PostgreSQL\ntelemetry_events\n~50K rows/14d")]
-    ING -->|HSET vehicle:vin:status| RD[("Redis\nLive Status Cache\nTTL=24h")]
-
-    PG -->|ordered by ts,seq| SEG["Segmentation Engine\nM4: O(n) state machine\nper-vehicle single pass"]
-
-    SEG --> TRIPS[("trips\nidle_events")]
-
-    TRIPS -->|LEFT JOIN + aggregation| COST["Cost Engine\nM5: daily rollup\nweighted top-K scoring"]
-
-    COST --> CSD[("cost_summary_daily\nmonthly_fleet_cost\nmaterialized view")]
-
-    CSD --> API["FastAPI\nJWT auth, rate limiting\n/fleet/summary, /fleet/offenders\n/vehicles/{id}/cost-summary"]
+    DAILY --> API["FastAPI\nJWT + rate limits\nweekly summary + paginated offenders"]
     RD --> API
-
-    API --> DASH["React Dashboard\nFleet overview\nOffender leaderboard\nVehicle drill-down\nLive status card"]
-    API --> AI["AI Assistant\nSQL-grounded context + user prompt\nLLM-generated response\nAudit log to agent_logs"]
-
-    DASH --> FM["Fleet Manager"]
-    AI --> FM
+    API --> UI["React dashboard\nsummary, leaderboard, drill-down"]
+    API --> AI["AI assistant\nSQL context + optional Groq"]
+    UI --> USER["Fleet manager"]
+    AI --> USER
 ```
 
 ---
@@ -164,7 +161,7 @@ erDiagram
 
 ```mermaid
 flowchart LR
-    subgraph "docker compose (local) / K8s (prod)"
+    subgraph "Verified local Docker Compose topology"
         direction TB
         RP_C["redpanda\nkafka:9092"]
         PG_C["postgres\ntimescaledb:pg16\n:5432"]
@@ -175,16 +172,15 @@ flowchart LR
         DASH_C["dashboard\nnginx:alpine\n:80\n/api -> api:8000"]
     end
 
-    subgraph "External"
+    subgraph "Optional external integration / unverified deployment scaffolding"
         GROQ_E["Groq API\nopenai/gpt-oss-20b"]
-        SIM_E["Simulator\ndata_simulator.py"]
     end
 
-    SIM_E -->|kafka produce| RP_C
+    SEG_C -->|bulk seed, segment + rollup| PG_C
+    SEG_C -->|60 live sample events| RP_C
     RP_C --> ING_C
     ING_C --> PG_C
     ING_C --> RD_C
-    SEG_C --> PG_C
     PG_C --> API_C
     RD_C --> API_C
     API_C --> GROQ_E
@@ -224,7 +220,8 @@ sequenceDiagram
     Note over PG: Duplicates silently dropped\nby unique index (vin, ts, seq)
     PG-->>CON: OK
     CON->>RP: commit offsets
-    Note over CON: At-least-once delivery\n+ idempotent writes = exactly-once semantics
+    Note over CON: At-least-once delivery; database event writes are idempotent.
+    Note over CON,RD: Postgres commit and Redis update are not one atomic transaction.
 ```
 
 ---

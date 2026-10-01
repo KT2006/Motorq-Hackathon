@@ -47,7 +47,7 @@ MAX_IN_TRIP_IDLE_SEC: int = 900  # 15 minutes
 # 5. Idle burn rates (litres/hour for ICE, kWh/hour for EV)
 # ---------------------------------------------------------------------------
 # These match the simulator's assumptions so our cost numbers agree.
-# In production, pull these from `idle_burn_rate_reference` in Supabase.
+# In a production deployment, load these from managed reference data.
 IDLE_BURN_RATE = {
     "petrol":  0.6,   # L/h
     "diesel":  0.5,   # L/h
