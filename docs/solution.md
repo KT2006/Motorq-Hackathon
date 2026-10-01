@@ -1,10 +1,14 @@
 # Fleet Fuel, Idling, and Utilisation Intelligence
 
-> **Submission status:** technical solution narrative, aligned to the supplied
-> solution-document template. Team metadata, final screenshots, repository
-> submission URL, and the ≤5-minute demo-video link are submission inputs not
-> present in this repository. This document distinguishes observed evidence
-> from targets and unverified deployment/scale claims.
+> **Submission status:** individual technical solution narrative, aligned to
+> the supplied solution-document template. Author details are recorded below;
+> final screenshots, repository submission URL, and the ≤5-minute demo-video
+> link remain to be added. This document distinguishes observed evidence from
+> targets and unverified deployment/scale claims.
+
+**Author:** Kshitij Totawar; **Email:** kshitij.totawar@gmail.com
+
+**Contribution:** Sole individual contributor
 
 ## 1. Executive summary
 
@@ -53,7 +57,7 @@ documented in [`algorithms.md`](algorithms.md).
 
 | Evidence / assumption | Method | What it supports | Confidence |
 |---|---|---|---|
-| Local event, trip, and cost data | Deterministic synthetic simulator | End-to-end product behavior, not real-world prevalence or savings | High for repeatability; low for real-world validity |
+| Local event, trip, and cost data | Procedural synthetic simulator; fixed seeds are used in selected unit tests | End-to-end product behavior, not real-world prevalence or savings | High for repeatable workflow; low for real-world validity |
 | Fuel economy, idle burn, energy/fuel prices | Fixed simulator/reference constants listed above | Consistent illustrative INR calculations | Low as a real-fleet estimate |
 | User pain and alternatives | Problem framing only; no user interviews or competitor study recorded | Product hypothesis, not market validation | Low |
 
@@ -228,7 +232,8 @@ documented in [`architecture.md`](architecture.md),
 - **Configuration/disposability:** service configuration is environment
   driven; local data stores are disposable.
 - **State machine:** ordered telemetry is segmented in a deterministic
-  per-vehicle pass.
+  per-vehicle pass; the current implementation reads stored telemetry in
+  batches and does not perform live streaming segmentation.
 - **At-least-once ingestion:** broker offsets are committed after database
   handling; event persistence is idempotent for duplicate keys.
 - **Not implemented/verified:** comprehensive retry/circuit-breaker behavior,
@@ -236,8 +241,9 @@ documented in [`architecture.md`](architecture.md),
 
 ### 6.3 Interfaces, contracts, and runtime flows
 
-The API contract is in [`openapi.json`](openapi.json), but synchronization
-with the current API has not been confirmed. The streaming topic is
+The API contract in [`openapi.json`](openapi.json) was regenerated from the
+running API on 2026-10-01. Regenerate it when endpoint contracts change. The
+streaming topic is
 `telemetry`; events are JSON validated by Pydantic. The current event path does
 not have a schema registry or a documented compatibility/evolution policy.
 The API has JWT-protected routes and configured rate limits; it does not claim
@@ -303,19 +309,21 @@ are not implemented. See [`security.md`](security.md).
 ## 9. Test strategy and current results
 
 Unit, contract, segmentation, cost, and simulator tests are in `tests/`;
-GitHub Actions has unit, frontend, integration, and image-build jobs.
-The latest focused seed-profile test invocation passed 5 tests. A separate
-host test invocation could not collect simulator tests because NumPy was not
-installed in that host environment. The saved partial coverage report is 35%,
-below the 80% target. CI integration credentials were aligned to Compose's
-local default; current CI execution is still pending.
+GitHub Actions has unit, frontend, integration, and image-build jobs. On
+2026-10-01, the selected CI Python unit-test set passed 44 tests in an
+isolated environment with simulator dependencies installed; the Compose API
+smoke journey passed 2 tests. Dashboard lint and production build completed;
+lint emitted warnings and the build reported a large JavaScript chunk
+warning. These are focused checks, not a complete test or production
+qualification. The saved partial coverage report is 35%, below the 80%
+target. CI integration credentials were aligned to Compose's local default,
+but the workflow has not been run on GitHub in this session.
 
 | Test area | Evidence | Status |
 |---|---|---|
-| Focused seed profile | 5 passed | Verified in current workspace |
-| Broader local Python suite | Prior collection blocked by missing NumPy | Not fully verified |
-| API smoke journey | Previous fresh Compose run returned health, summary, offenders, detail | Local evidence; rerun in current verification |
-| Frontend lint/build | CI workflow configured | To be run during this verification |
+| Selected CI Python test set | 44 passed (2026-10-01) | Verified in isolated environment |
+| API smoke journey | 2 passed (2026-10-01) | Verified against fresh Compose data; dashboard and health endpoints returned HTTP 200 |
+| Frontend lint/build | Both commands completed; lint and chunk-size warnings remain | Build verified; warnings need review |
 | Integration CI workflow | Updated to use Compose defaults and cleanup | Not run on GitHub in this session |
 | Coverage | Saved report 35% on selected modules | Below 80% target |
 | Security image scan | Earlier scan only | Current image requires rescan |
@@ -365,7 +373,7 @@ do not use an unverified scale claim as the product demo.
 | Checklist item | Status |
 |---|---|
 | README, quick start, environment and known limitations | Documented |
-| One-command local run and disposable data | Locally verified previously; being rerun |
+| One-command local run and disposable data | Fresh Compose workflow verified locally on 2026-10-01 |
 | Service folders, docs, tests, infrastructure artifacts | Present |
 | CI build/test workflow | Present; integration credential alignment fixed; not yet run on GitHub |
 | `.env.example` | Present; contains example values, not a secrets-management solution |
@@ -386,7 +394,7 @@ overstating results.
 - **Synthetic data:** all vehicle telemetry and cost outputs used by this demo
   are generated; no real personal or vehicle-owner data is intentionally used.
 - **AI assistance:** Google Antigravity was used for planning, code/document
-  drafting, and tests; Groq is an optional runtime response service. The team
+  drafting, and tests; Groq is an optional runtime response service. The author
   must review and validate submitted work.
 - **Open source:** dependencies are listed in project manifests. A complete
   license/SBOM review has not been performed.
@@ -395,7 +403,8 @@ overstating results.
 
 | Item | Status |
 |---|---|
-| Team name and member roles | To be supplied |
+| Individual author | Kshitij Totawar — sole contributor |
+| Contact email | kshitij.totawar@gmail.com |
 | Repository/submission URL | To be supplied |
 | Working-product screenshot(s) | To be captured from a fresh demo run |
 | Demo video (≤5 minutes) | To be recorded and linked |

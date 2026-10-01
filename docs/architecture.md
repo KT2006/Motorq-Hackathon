@@ -11,48 +11,54 @@
 C4Context
     title Fleet Fuel, Idling & Utilisation Cost — System Context
 
-    Person(fm, "Fleet Manager", "Monitors idling waste, fuel costs, and utilisation. Acts on AI recommendations.")
-    Person(admin, "Fleet Admin", "Manages vehicle/driver data, views audit logs.")
+    Person(fm, "Fleet Manager", "Reviews idling, costs, utilisation, and vehicle analytics.")
 
-    System(sys, "Fleet Intelligence Platform", "Ingests raw telemetry, computes cost, surfaces insight via dashboard and AI agent.")
+    System(sys, "Fleet Intelligence Platform", "Seeds synthetic data, computes fleet costs, and serves dashboard analytics.")
 
-    System_Ext(telematics, "Synthetic telemetry producer", "Generates route, fuel, speed, and ignition events for the local demo.")
-    System_Ext(groq, "Groq LLM API", "Writes answers using compact, authoritative fleet context queried from PostgreSQL.")
+    System_Ext(groq, "Groq LLM API (optional)", "Generates assistant responses using compact SQL-derived context.")
 
-    Rel(telematics, sys, "Streams raw telemetry events", "Kafka/Redpanda")
-    Rel(fm, sys, "Views dashboard, queries AI agent", "HTTPS / React")
-    Rel(admin, sys, "Manages fleet data", "HTTPS / React")
-    Rel(sys, groq, "Sends fleet context and user prompt", "HTTPS / REST")
+    Rel(fm, sys, "Views fleet and vehicle analytics", "HTTP / React")
+    Rel(sys, groq, "Optional prompt and SQL-derived context", "HTTPS / REST")
 ```
 
 ---
 
-## 2. Data-Flow Pipeline Diagram
+## 2. Batch Seed and Live-Event Data Flow
 
 ```mermaid
-flowchart LR
-    subgraph Startup["One-shot startup seed"]
-        SIM["Seeder + route simulator\n1,000 vehicles × 7 days\n(default)"] -->|bulk INSERT| PG[("Local TimescaleDB\ntelemetry + master data")]
-        PG --> SEG["M4 segmentation\nall balanced-profile vehicles"]
-        SEG --> TRIPS[("trips + idle_events")]
-        TRIPS --> COST["M5 daily cost rollup"]
-        COST --> DAILY[("cost_summary_daily\n7,000 rows in verified run")]
-    end
+sequenceDiagram
+    participant COMPOSE as Docker Compose
+    participant SEED as One-shot seeder
+    participant SIM as Route simulator
+    participant DB as Local TimescaleDB
+    participant RP as Redpanda
+    participant ING as Ingestion consumer
+    participant CACHE as Redis
+    participant API as FastAPI
+    participant UI as React dashboard
 
-    subgraph Stream["Live-event demo path"]
-        PRODUCER["Seeder publishes\n60 sample events"] --> RP["Redpanda\ntelemetry topic"]
-        RP --> ING["Ingestion consumer\nvalidate + deduplicate"]
-        ING --> PG
-        ING --> RD[("Redis\nlive status cache")]
-    end
-
-    DAILY --> API["FastAPI\nJWT + rate limits\nweekly summary + paginated offenders"]
-    RD --> API
-    API --> UI["React dashboard\nsummary, leaderboard, drill-down"]
-    API --> AI["AI assistant\nSQL context + optional Groq"]
-    UI --> USER["Fleet manager"]
-    AI --> USER
+    COMPOSE->>SEED: Start after Postgres and Redpanda health checks
+    SEED->>DB: Insert fleets and vehicles
+    SEED->>SIM: Generate the selected seed profile
+    SIM->>DB: Bulk-write telemetry
+    SEED->>DB: Segment trips/idles and roll up daily costs
+    SEED->>RP: Publish 60 sample live events
+    SEED-->>COMPOSE: Exit successfully after publish
+    Note over RP,ING: Consumer processes live events asynchronously; seeding does not wait for Redis updates
+    RP->>ING: Deliver events from telemetry topic
+    ING->>DB: Validate and idempotently persist
+    ING->>CACHE: Update latest status per vehicle
+    COMPOSE->>API: Start after successful seed
+    COMPOSE->>UI: Start after API health check
+    UI->>API: Request fleet summary, offenders, or vehicle detail
+    API->>DB: Read derived analytics
+    API-->>UI: Return dashboard data
 ```
+
+The startup seed writes historical telemetry directly to Postgres; Redpanda
+is a separate live-event path. The configured balanced profile is 1,000
+vehicles × 7 days; the verified run produced 7,000 daily cost rows. Other
+profile sizes are described in the README and scale report.
 
 ---
 
@@ -157,36 +163,37 @@ erDiagram
 
 ---
 
-## 5. Deployment Topology
+## 5. Local Deployment Topology
+
+The local Compose stack is single-node. The diagrams are split by traffic
+path so service dependencies remain easy to follow.
+
+### Browser request path
+
+```mermaid
+flowchart TB
+    BROWSER["Browser<br/>localhost:80"] --> DASH["Dashboard<br/>Nginx"]
+    DASH -->|"HTTP /api proxy"| API["FastAPI<br/>localhost:8000"]
+    API --> DB[("PostgreSQL<br/>TimescaleDB")]
+    API --> CACHE[("Redis<br/>live status")]
+    API -. optional .-> GROQ["Groq API"]
+```
+
+### Telemetry ingestion path
 
 ```mermaid
 flowchart LR
-    subgraph "Verified local Docker Compose topology"
-        direction TB
-        RP_C["redpanda\nkafka:9092"]
-        PG_C["postgres\ntimescaledb:pg16\n:5432"]
-        RD_C["redis:7-alpine\n:6379"]
-        ING_C["ingestion\nconsumer.py\nbatch=500"]
-        SEG_C["seeder\nseed_and_run.py\none-shot on startup"]
-        API_C["api\nfastapi+uvicorn\n:8000"]
-        DASH_C["dashboard\nnginx:alpine\n:80\n/api -> api:8000"]
-    end
-
-    subgraph "Optional external integration / unverified deployment scaffolding"
-        GROQ_E["Groq API\nopenai/gpt-oss-20b"]
-    end
-
-    SEG_C -->|bulk seed, segment + rollup| PG_C
-    SEG_C -->|60 live sample events| RP_C
-    RP_C --> ING_C
-    ING_C --> PG_C
-    ING_C --> RD_C
-    PG_C --> API_C
-    RD_C --> API_C
-    API_C --> GROQ_E
-    DASH_C --> API_C
-    BROWSER["Browser\nhttp://localhost:80"] --> DASH_C
+    PRODUCER["Seeder<br/>60 demo events"] --> BROKER["Redpanda<br/>telemetry topic"]
+    BROKER --> CONSUMER["Ingestion consumer<br/>batch size 5,000"]
+    CONSUMER --> DATABASE[("PostgreSQL<br/>TimescaleDB")]
+    CONSUMER --> STATUS[("Redis<br/>live status")]
 ```
+
+The API and startup seeder connect directly to Postgres; the API reads live
+status directly from Redis. PgBouncer is included and health-checked by
+Compose, but the current API URL does not route through it. Groq is external
+and optional. Kubernetes/Terraform files are unverified scaffolding, not part
+of this local deployment.
 
 ---
 
@@ -198,31 +205,37 @@ sequenceDiagram
     participant CON as Ingestion Consumer
     participant PG as PostgreSQL
     participant RD as Redis
+    participant DLQ as telemetry-dlq topic
 
-    Note over CON: Normal operation
-    RP->>CON: poll batch (500 msgs)
-    CON->>PG: INSERT batch (ON CONFLICT DO NOTHING)
-    PG-->>CON: OK
-    CON->>RD: HSET pipeline (live status)
-    RD-->>CON: OK
-    CON->>RP: commit offsets
-    Note over CON: Batch committed
-
-    Note over CON: Failure scenario
-    RP->>CON: poll batch (500 msgs)
-    CON->>PG: INSERT batch
-    PG--xCON: Connection error
-    CON->>PG: ROLLBACK
-    CON->>CON: sleep 2s, reconnect
-    Note over RP: Offsets NOT committed
-    CON->>RP: re-poll same batch
-    CON->>PG: INSERT batch (ON CONFLICT DO NOTHING)
-    Note over PG: Duplicates silently dropped\nby unique index (vin, ts, seq)
-    PG-->>CON: OK
-    CON->>RP: commit offsets
-    Note over CON: At-least-once delivery; database event writes are idempotent.
-    Note over CON,RD: Postgres commit and Redis update are not one atomic transaction.
+    RP->>CON: Poll records (up to configured batch)
+    loop For each record in the polled batch
+        CON->>CON: Parse JSON and validate schema
+        alt Invalid record
+            CON->>DLQ: Attempt to publish original record + error
+            Note over CON,DLQ: Send failures are logged; processing continues
+        else Valid record
+            CON->>PG: Add event to batch insert
+        end
+    end
+    opt At least one valid record
+        CON->>PG: Persist valid events; commit database transaction
+        CON->>RD: Update live-status cache
+    end
+    alt Database or Redis operation fails
+        CON->>CON: Roll back open transaction; reconnect if needed
+        Note over RP,CON: Offsets are not committed; records can be replayed
+        Note over PG,RD: If Postgres had committed before Redis failed, the replayed DB inserts are idempotent
+    else Batch handling succeeds
+        CON->>RP: Commit offsets
+    end
 ```
+
+Postgres insertion is committed before the Redis update, so the stores are
+not atomic. On a Redis failure, Kafka offsets remain uncommitted and replayed
+event inserts are idempotent, but the Redis update must still succeed before
+offsets are committed. A dead-letter send failure is a known gap: the helper
+logs that failure while the consumer can still advance the offset. This local
+implementation does not promise zero data loss under every failure mode.
 
 ---
 
@@ -234,11 +247,11 @@ sequenceDiagram
     participant API as FastAPI /chat
     participant DB as PostgreSQL
     participant LLM as Groq LLM
-    participant LOG as audit_log
+    participant AUDIT as audit_log / agent_logs
 
     U->>API: POST /chat {query, from_date, to_date}
     API->>API: verify JWT, extract fleet_id
-    API->>LOG: audit_log(user, "ai_query", "chat")
+    API->>AUDIT: Write selected audit event
     alt Fleet-data question
         API->>DB: Aggregate costs, idle time, utilisation for requested dates
         DB-->>API: Authoritative metrics
@@ -253,6 +266,6 @@ sequenceDiagram
         LLM-->>API: General response
     end
 
-    API->>DB: INSERT INTO agent_logs
+    API->>AUDIT: Write assistant question and answer to agent_logs
     API-->>U: {answer, tool_calls: []}
 ```

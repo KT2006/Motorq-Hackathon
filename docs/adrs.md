@@ -7,13 +7,13 @@
 **Context:** Need to store telemetry events (100K+/sec target), trips, idle events, cost summaries. Need time-series queries, standard SQL joins for cost rollup, and ACID guarantees.  
 **Decision:** PostgreSQL with TimescaleDB hypertable for telemetry_events. Standard relational tables for master data and aggregates.  
 **Alternatives Considered:** InfluxDB (no SQL joins), Apache Druid (complex ops), ClickHouse (no ACID), DynamoDB (expensive at scale).  
-**Consequences:** Flexible SQL joins and familiar operations. The local demo uses a single node; its write ceiling has not been established. The measured short streaming test is documented in `scale-benchmark.md` and is well below the challenge target. Production capacity, compression policy, partitioning, and replicas require workload-specific validation.
+**Consequences:** Flexible SQL joins and familiar operations. The local demo uses a single node; its write ceiling has not been established. The measured short streaming test is documented in `scale-benchmark.md` and is well below the challenge target. Production capacity, compression, partitioning, and replicas require workload-specific validation; no compression policy is enabled in the local Compose setup.
 
 ## ADR-2: Redpanda for event streaming over Apache Kafka
 
 **Status:** Accepted  
 **Date:** 2026-09-29  
-**Context:** Need a message broker for the telemetry streaming pipeline. Must handle bursty traffic, replay, and consumer groups.  
+**Context:** Need a message broker for a replayable telemetry streaming path and consumer groups. The local configuration is a single broker and has not been qualified for the challenge burst target.
 **Decision:** Redpanda (Kafka-compatible, single-binary, no JVM/ZooKeeper).  
 **Alternatives Considered:** Apache Kafka (heavier ops), RabbitMQ (no log replay), AWS Kinesis (vendor lock-in).  
 **Consequences:** Lower ops overhead, same Kafka protocol. Community edition sufficient for hackathon. Production would evaluate Redpanda Cloud or managed Kafka.
@@ -34,7 +34,7 @@
 **Context:** Need to rank vehicles by "worst idling offenders." Simple approach: threshold on total idle minutes. Problem: high-utilization vehicles with moderate absolute idle get missed; low-utilization vehicles with high idle percentage get missed.  
 **Decision:** Weighted composite score: W_COST × normalized_idle_cost + W_PCT × idle_pct_of_active + W_MIN × normalized_idle_minutes. All weights = 1.0 (equal). Normalization against fleet-wide max values.  
 **Alternatives Considered:** Single-metric ranking (idle minutes only), ML clustering, percentile-based.  
-**Consequences:** Provably better signal than naive threshold (test_cost_calc.py demonstrates a case where rankings differ). Weights are tunable per fleet operator. Trade-off: score is relative to the fleet, not absolute.
+**Consequences:** The weighted score captures cost, relative idle share, and idle volume; a unit test demonstrates one case where its result differs from the naive threshold. This does not prove better real-world predictions. Weights are tunable per fleet operator. Trade-off: score is relative to the fleet, not absolute.
 
 ## ADR-5: Database-backed assistant answers over RAG/vector-store
 
@@ -49,7 +49,7 @@
 
 | Store | Role | Why This Store | Failure Behavior |
 |-------|------|----------------|------------------|
-| PostgreSQL (TimescaleDB) | Telemetry, trips, idles, costs, audit | SQL joins for cost rollup, ACID for idempotent writes, TimescaleDB for time-series compression | Consumer retries on connection failure; ON CONFLICT prevents double-counting |
-| Redis | Live vehicle status cache | Sub-ms reads for dashboard polling, TTL for stale data cleanup | Dashboard shows "no stream data yet" if Redis unavailable; non-critical path |
-| Redpanda | Event streaming | Kafka-compatible log for replay/reprocessing, consumer groups for parallelism | Consumer lag increases during outage; drains on recovery; no data loss with committed offsets |
+| PostgreSQL (TimescaleDB) | Telemetry, trips, idles, costs, audit | SQL joins for cost rollup and transactional event writes | Consumer retries uncommitted batches; event-key conflict handling makes repeated DB inserts idempotent |
+| Redis | Live vehicle status cache | Ephemeral latest status with TTL | API reports missing/unavailable status when no cache entry exists; cross-store consistency is not atomic |
+| Redpanda | Event streaming | Kafka-compatible topic and consumer-group offset tracking | Replay is possible from uncommitted offsets; local burst capacity is unverified and dead-letter send failures may still be followed by offset commits |
 | No vector store | Fleet metrics are queried directly with SQL | Structured fleet data is better served by SQL than semantic search | N/A |

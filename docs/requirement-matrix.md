@@ -23,10 +23,10 @@ has been independently validated.
 | R15 | At least 80% core-service coverage | Pytest/coverage workflow | Saved focused run reports 35% total across measured modules; not a full current-suite report | **Not met** |
 | R16 | Security scan | Trivy report in `docs/trivy_scan_api.txt` | Saved scan is for an earlier image: 44 HIGH, 53 MEDIUM, 0 CRITICAL | **Partial; rescan current images** |
 | R17 | 3–5 architecture decisions | `docs/adrs.md` | Five ADRs documented | **Documented** |
-| R18 | Current OpenAPI contract | `docs/openapi.json` | File exists; synchronization with latest API changes has not been confirmed | **Partial; regenerate/compare** |
+| R18 | Current OpenAPI contract | `docs/openapi.json` | Regenerated from the running API on 2026-10-01; regenerate after endpoint changes | **Generated; ongoing synchronization required** |
 | R19 | Tenant isolation | JWT fleet claim and query filters | `tests/test_security.py` | **Implemented; expand endpoint-level authorization tests** |
 | R20 | Audit trail for data access and AI actions | `audit_log` and `agent_logs` | Selected reads and chat calls log; failures are swallowed/logged and coverage is not comprehensive | **Partial; not every access guaranteed** |
-| D1 | Completed solution document and ≤5-minute demo video | `docs/solution.md` and recording | Solution write-up is a project summary; team/submission metadata and video link are not provided | **Pending completion** |
+| D1 | Completed solution document and ≤5-minute demo video | `docs/solution.md` and recording | Individual author metadata and technical narrative are present; screenshot and video link are not provided | **Partially complete; submission media pending** |
 | D2 | Cloud deployment, cloud agnosticism, HA | Kubernetes and Terraform scaffolding | Artifacts are explicitly untested; local Compose is single-node | **Planned / unverified** |
 | D3 | Observability, privacy, compliance, erasure | Logs and lifecycle notes | No verified centralized metrics/traces, location masking, or right-to-erasure flow | **Not demonstrated** |
 

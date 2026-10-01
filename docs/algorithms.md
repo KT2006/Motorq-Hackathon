@@ -2,7 +2,7 @@
 
 > **Module**: `services/segmentation/`
 > **Author**: Kshitij Totawar
-> **Satisfies**: Solution Document Section 9 — Algorithm / DP Explanation
+> **Satisfies**: Solution Document Section 6.4 — Algorithm Design
 
 ---
 
@@ -13,9 +13,11 @@ Raw `telemetry_events` is a wall of GPS pings — thousands per vehicle per day,
 - **Trips** — coherent "vehicle went from A to B" records with distance, duration, fuel consumed
 - **Idle Events** — periods where the vehicle was stationary with the engine on, classified by type:
   - `in_trip` — red-light stops, traffic jams (mid-journey)
-  - `pre_trip` — warming up before driving
-  - `depot` — parked at base, engine idling
-  - `unauthorized` — idling at an unexpected location (v2, requires geofence data)
+  - `depot` — stationary with ignition on outside an active trip (the current fallback category; no geofence check)
+
+`pre_trip` and `unauthorized` are not currently emitted by the implementation.
+The former has unfinished tracking scaffolding; the latter requires geofence
+data and classification logic.
 
 The segmentation engine is the **single transformation** that turns raw telemetry into these structured events. Every downstream feature — cost calculation, utilisation metrics, the dashboard, the AI agent — depends on this being correct.
 
@@ -31,12 +33,17 @@ For each vehicle (identified by `vin`), we:
 2. Walk through them **once** in a single linear pass, maintaining a finite state machine with 3 states
 3. Emit `trip` and `idle_event` records as state transitions occur
 
-This is an **online, streaming-compatible** algorithm — each row's classification depends only on:
+The state transition can be evaluated row by row, and each classification depends on:
 - The current state (one of 3 values)
 - The currently-open trip/idle event (bounded metadata)
 - The current row's fields
 
-No lookback, no lookahead, no sorting within the walk. This is the key **dynamic programming insight**: the optimal classification at row `i` is fully determined by the state carried forward from row `i-1`, not by the entire history.
+The implementation currently loads a vehicle's ordered telemetry and applies
+this state machine as a batch operation; the Redpanda consumer does not invoke
+the segmentation engine. The state machine is stream-compatible in principle,
+but incremental checkpointing and live trip segmentation are not implemented.
+This is a finite-state-machine approach, not a dynamic-programming
+optimization problem.
 
 ### 2.2 State Machine
 
@@ -116,7 +123,7 @@ for each row in telemetry_events (ordered by ts ASC):
 | **Min idle duration** | 60 seconds | A 5-second stop at a traffic light isn't operationally meaningful. Operators care about *minutes* of wasted fuel. |
 | **Min trip distance** | 0.1 km (100 m) | Filters phantom micro-trips from GPS drift. A real trip covers at least 100 meters. |
 | **Min trip duration** | 30 seconds | Prevents GPS noise blips from registering as trips. |
-| **Max in-trip idle** | 900 seconds (15 min) | If a vehicle is motionless for >15 min during a "trip", the trip is effectively over. Real traffic jams rarely pin you completely motionless this long. |
+| **Max in-trip idle** | 900 seconds (15 min) | Ends a trip when an in-trip idle exceeds the configured threshold. This is a demo heuristic, not a validated traffic-domain rule. |
 
 All thresholds are defined in [`config.py`](../services/segmentation/config.py) and can be adjusted based on spot-check validation.
 
@@ -126,8 +133,8 @@ All thresholds are defined in [`config.py`](../services/segmentation/config.py) 
 
 | Dimension | Complexity | Explanation |
 |-----------|-----------|-------------|
-| **Time** per vehicle | **O(n)** | Single linear pass through `n` telemetry rows. No nested loops, no sorting (data arrives pre-sorted via `ORDER BY ts ASC`). |
-| **Space** per vehicle | **O(1)** working memory | Only the current state enum + 2 open event dicts. The output lists grow with the number of trips/idles, but working memory is constant. |
+| **Time** per vehicle | **O(n)** | Single linear pass through `n` telemetry rows. No nested loops; the caller fetches each vehicle's rows ordered by `ts ASC, seq ASC`. |
+| **Auxiliary state** per vehicle | **O(1)** | The state machine keeps a state enum and bounded open-event metadata. This excludes the input rows loaded by the caller and the output trip/idle lists, both of which grow with the input. |
 | **Total time** | **O(N)** | Where N = total telemetry events across all vehicles. Each vehicle is independent — embarrassingly parallel if needed. |
 | **Database I/O** | **O(N/B)** | B = batch size (500). We use `psycopg2.extras.execute_values` for bulk inserts, not row-by-row. |
 
@@ -175,16 +182,20 @@ capacity.
 
 ## 7. Idle Type Classification (v1 → v2 upgrade path)
 
-**v1 (current):**
+**Currently emitted:**
 - `in_trip` — idle event occurs within an active trip window
-- `pre_trip` — idle occurs immediately before a trip starts
-- `depot` — all other idle events (default)
-- `unauthorized` — not classified in v1
+- `depot` — stationary idle outside an active trip (default)
+
+`pre_trip` tracking is scaffolded but never opened in the current state
+machine, so it is not currently persisted. `unauthorized` is also not
+classified.
 
 **v2 (when geofence data is available):**
 - Add a `depot_locations` table with lat/lon + radius per fleet
 - During `_close_idle()`, compute haversine distance from idle location to nearest depot
 - If distance > radius → classify as `unauthorized` instead of `depot`
+- Implement and test the separate `pre_trip` classification rule if that
+  distinction remains a product requirement.
 
 ---
 
@@ -266,9 +277,14 @@ score = w₁ × norm(idle_cost) + w₂ × (idle_pct / 100) + w₃ × norm(idle_m
 ```
 
 Where:
-- `norm(x) = x / max(x)` — min-max normalization to [0, 1] across the fleet
+- `norm(x) = x / max(1, fleet_max(x))` for idle cost and minutes — scale by
+  the fleet maximum, with a floor of 1 to avoid division by zero
 - `idle_pct = idle_min / (idle_min + drive_min) × 100` — idle as fraction of active time
 - Weights: `w₁ = w₂ = w₃ = 1.0` (equal weights — defensible starting point; tunable)
+
+The percentage component is divided by 100 directly. The floor on the other
+two denominators means those components are at most 1, though they may remain
+below 1 when every fleet value is less than 1.
 
 This captures three distinct dimensions:
 1. **Absolute cost** (w₁) — catches expensive idlers (diesel trucks)
@@ -277,10 +293,15 @@ This captures three distinct dimensions:
 
 ### 10.4 Implementation
 
-PostgreSQL's `ORDER BY score DESC LIMIT K` implements top-K efficiently:
-- The database engine does NOT sort the entire table
-- It maintains a bounded heap of size K during the scan
-- **Complexity**: O(n log K) where n = number of vehicles — heap insertion is O(log K) per vehicle
+PostgreSQL's `ORDER BY score DESC LIMIT K` returns only the top K rows. The
+planner may use a bounded top-N sort, but still needs to evaluate the candidate
+vehicles; the exact plan depends on the query and data. This implementation
+does not guarantee an index-assisted top-K operation.
+
+- **Typical top-N sort complexity**: O(n log K), where n is the number of
+  candidate vehicles and K is the requested result count.
+- Confirm the actual plan with `EXPLAIN (ANALYZE, BUFFERS)` for the target
+  workload; do not treat the complexity statement as a measured result.
 
 ### 10.5 Baseline vs Weighted — Worked Example
 

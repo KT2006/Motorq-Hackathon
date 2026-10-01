@@ -31,14 +31,13 @@ POST     /token                                                                 
          Aggregated                                                           2550       *2407(94.39%) |     48       1    2237      2 |  129.10
 ```
 
-*\* Note: The high failure rate was by design, as the API enforces a strict rate limit (`100/minute`), so most requests naturally resulted in `429 Too Many Requests`. This accurately tests that the API rate limiter handles high-load floods defensively.*
-
 **Interpretation:** This run is **not a successful 129 req/s API capacity
 result**. The aggregate includes 94.39% failures, mostly rate-limited
 responses; the reported request rate counts failed requests too. It shows that
-the rate limiter rejects excess traffic, not that the application serves
-that load successfully. The low successful-response median does not establish
-tail latency or behavior under a representative workload.
+the limiter rejected excess traffic in that run, not that the application
+served that load successfully. The run was not a clean capacity test, and the
+low successful-response median does not establish tail latency or behavior
+under a representative workload.
 
 ## Local Compose Smoke Load (2026-10-01)
 

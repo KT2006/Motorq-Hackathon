@@ -11,7 +11,7 @@ certification.
 | Authentication | Protected API routes require a JWT; `/token` issues demo tokens. | Compose supplies a known local fallback user/password and signing key so judges need no secrets file. Never expose these defaults publicly. |
 | Tenant scope | JWT contains a fleet claim; API queries apply the fleet filter for non-admin users. | Expand endpoint-level negative authorization tests before deployment. |
 | Request limits | SlowAPI rate limits are configured on API routes. | No sustained overload or distributed-rate-limit validation. |
-| Input validation | Pydantic validates incoming telemetry; malformed JSON/schema records are sent to a dead-letter topic. | Broker authentication and schema-registry governance are not configured. |
+| Input validation | Pydantic validates incoming telemetry; malformed JSON/schema records are sent to a dead-letter topic on a best-effort basis. | DLQ send failures are logged, but the current consumer may still commit offsets; broker authentication and schema-registry governance are not configured. |
 | CORS | API uses an explicit `CORS_ORIGINS` allowlist; Compose supplies local development origins. | Recheck values in any deployed environment. |
 | Audit records | Selected sensitive reads and chat requests write to `audit_log`; AI exchanges also use `agent_logs`. | Auditing is not comprehensive. Audit-write failures are logged and do not fail the request. |
 
@@ -23,7 +23,7 @@ certification.
 | Event tampering in transit | Event identity key `(vin, ts, seq)` makes database writes idempotent | Configure TLS/mTLS; idempotency does not prevent a malicious actor from fabricating valid events. |
 | Repudiation of AI requests | Selected requests and answers are stored in application logs | Make audit writes durable, complete, and failure-aware; verify retention/access controls. |
 | Unauthorized data access | JWT auth and fleet filters | Add broad cross-tenant negative tests and production identity/RBAC controls. |
-| API/resource exhaustion | Per-route rate limits and PgBouncer | Test 3× burst, connection exhaustion, and recovery behavior. |
+| API/resource exhaustion | Per-route rate limits; PgBouncer is present in Compose but the API currently connects directly to Postgres | Test 3× burst, connection exhaustion, and recovery behavior; route API connections through the pooler if that is an intended control. |
 
 ## Image scan
 
