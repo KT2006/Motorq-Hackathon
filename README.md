@@ -27,7 +27,7 @@ a Groq API key configured in `.env`.
 
 Each synthetic day models a 10-hour shift with 2–5 trips, urban routes,
 traffic stops, and between-shift refueling/recharging. Telemetry is sampled at
-roughly three-minute intervals while moving, with additional trip and idle
+roughly one-minute intervals while moving, with additional trip and idle
 boundary events. Reference fuel efficiencies are petrol 12 km/L, diesel
 15 km/L, hybrid 18 km/L, and EV 5.5 km/kWh. Cost assumptions are petrol/hybrid
 ₹103/L, diesel ₹92/L, and electricity ₹8/kWh. Utilisation is measured against
